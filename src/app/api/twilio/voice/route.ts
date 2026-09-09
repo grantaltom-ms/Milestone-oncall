@@ -6,6 +6,7 @@ import {
   isValidTwilioRequest,
   readTwilioParams,
   sendSms,
+  signatureDiagnostics,
   smsSender,
 } from "@/lib/oncall/twilio";
 import { dial, hangup, record, say, twiml, twimlResponse } from "@/lib/oncall/twiml";
@@ -88,14 +89,15 @@ export async function POST(request: Request) {
   const callerId = config.mainLine ?? toE164(params.To);
 
   if (config.twilio) {
-    const valid = isValidTwilioRequest(
-      candidateUrls(request, config.publicBaseUrl),
-      params,
-      request.headers.get("x-twilio-signature"),
-      config.twilio.authToken
-    );
-    if (!valid) {
-      log({ stage, callSid, rejected: "bad_signature" });
+    const urls = candidateUrls(request, config.publicBaseUrl);
+    const signature = request.headers.get("x-twilio-signature");
+    if (!isValidTwilioRequest(urls, params, signature, config.twilio.authToken)) {
+      log({
+        stage,
+        callSid,
+        rejected: "bad_signature",
+        diagnostics: signatureDiagnostics(urls, params, signature, config.twilio.authToken),
+      });
       return new Response("Invalid Twilio signature", { status: 403 });
     }
   } else if (!config.allowUnsigned) {

@@ -60,6 +60,36 @@ export function isValidTwilioRequest(
   return urls.some((url) => safeEqual(computeTwilioSignature(url, params, authToken), signature));
 }
 
+/**
+ * When a genuine Twilio call gets rejected, the bare word "bad_signature" does
+ * not say which of the three possible causes it is. This reports enough to
+ * tell them apart in the logs — the URLs we tried, what each one hashes to,
+ * and the shape of the token — without ever printing the token itself.
+ *
+ * Reading it: if one candidate URL is the webhook URL configured in the Twilio
+ * Console and its `computed` still differs from `received`, the URL is fine and
+ * the auth token is wrong. A `tokenLength` other than 32 means the value pasted
+ * into the environment is not a Twilio auth token.
+ */
+export function signatureDiagnostics(
+  urls: string[],
+  params: Record<string, string>,
+  signature: string | null,
+  authToken: string
+) {
+  const short = (value: string) => value.slice(0, 12);
+  return {
+    received: signature ? short(signature) : null,
+    candidates: urls.map((url) => ({
+      url,
+      computed: short(computeTwilioSignature(url, params, authToken)),
+    })),
+    // Names only — values carry the caller's phone number.
+    paramKeys: Object.keys(params).sort(),
+    tokenLength: authToken.length,
+  };
+}
+
 export async function sendSms(
   twilio: TwilioConfig,
   message: { to: string; from: string; body: string }

@@ -5,6 +5,7 @@ import {
   isValidTwilioRequest,
   readTwilioParams,
   sendSms,
+  signatureDiagnostics,
 } from "@/lib/oncall/twilio";
 import { dial, escapeXml, record, say, twiml } from "@/lib/oncall/twiml";
 
@@ -146,5 +147,34 @@ describe("TwiML", () => {
     expect(record({ action: "/api/twilio/voice?stage=goodbye" })).toContain(
       'action="/api/twilio/voice?stage=goodbye"'
     );
+  });
+});
+
+describe("signatureDiagnostics", () => {
+  const { url, params, authToken } = TWILIO_EXAMPLE;
+
+  it("shows which candidate URL was tried and what each one hashes to", () => {
+    const received = computeTwilioSignature(url, params, authToken);
+    const report = signatureDiagnostics([url, "https://wrong.test/x"], params, received, "wrong-token");
+
+    expect(report.candidates.map((candidate) => candidate.url)).toEqual([url, "https://wrong.test/x"]);
+    expect(report.received).toBe(received.slice(0, 12));
+    // A wrong token makes every candidate differ — that is the tell.
+    expect(report.candidates.every((candidate) => candidate.computed !== report.received)).toBe(true);
+    expect(report.tokenLength).toBe("wrong-token".length);
+  });
+
+  it("matches on the right URL when the token is right", () => {
+    const received = computeTwilioSignature(url, params, authToken);
+    const report = signatureDiagnostics([url], params, received, authToken);
+    expect(report.candidates[0].computed).toBe(report.received);
+  });
+
+  it("never reveals the token or any parameter value", () => {
+    const report = signatureDiagnostics([url], params, "sig", authToken);
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain(authToken);
+    expect(serialized).not.toContain("+14158675309"); // the caller's number
+    expect(report.paramKeys).toEqual(["CallSid", "Caller", "Digits", "From", "To"]);
   });
 });
