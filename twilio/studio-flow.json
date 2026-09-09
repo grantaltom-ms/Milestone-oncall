@@ -1,0 +1,82 @@
+{
+  "description": "OPTIONAL alternative to pointing the Twilio number straight at /api/twilio/voice. Import in Twilio Console > Studio > Create new Flow > Import from JSON, then replace REPLACE_ME_APP_URL, REPLACE_ME_STATUS_KEY, REPLACE_ME_MAIN_LINE and REPLACE_ME_BACKUP_PHONE. Note: this Studio version only does the first ring plus a backup - the escalation ladder, the caller-ID text and voicemail notification live in the webhook version.",
+  "states": [
+    {
+      "name": "Trigger",
+      "type": "trigger",
+      "transitions": [
+        { "event": "incomingMessage" },
+        { "event": "incomingCall", "next": "get_on_call" },
+        { "event": "incomingConversationMessage" },
+        { "event": "incomingRequest" },
+        { "event": "incomingParent" }
+      ],
+      "properties": { "offset": { "x": 0, "y": 0 } }
+    },
+    {
+      "name": "get_on_call",
+      "type": "make-http-request",
+      "transitions": [
+        { "event": "success", "next": "check_on_call_found" },
+        { "event": "failed", "next": "connect_to_backup" }
+      ],
+      "properties": {
+        "method": "GET",
+        "content_type": "application/json;charset=utf-8",
+        "url": "REPLACE_ME_APP_URL/api/oncall/status?key=REPLACE_ME_STATUS_KEY",
+        "offset": { "x": 0, "y": 200 }
+      }
+    },
+    {
+      "name": "check_on_call_found",
+      "type": "split-based-on",
+      "transitions": [
+        { "event": "noMatch", "next": "connect_to_backup" },
+        {
+          "event": "match",
+          "next": "connect_to_tech",
+          "conditions": [
+            {
+              "friendly_name": "somebody is on call",
+              "arguments": ["{{widgets.get_on_call.parsed.on_call_found}}"],
+              "type": "equal_to",
+              "value": "true"
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "input": "{{widgets.get_on_call.parsed.on_call_found}}",
+        "offset": { "x": 0, "y": 400 }
+      }
+    },
+    {
+      "name": "connect_to_tech",
+      "type": "connect-call-to",
+      "transitions": [{ "event": "callCompleted" }, { "event": "hangup" }],
+      "properties": {
+        "noun": "number",
+        "to": "{{widgets.get_on_call.parsed.tech_phone}}",
+        "caller_id": "REPLACE_ME_MAIN_LINE",
+        "timeout": 25,
+        "record": false,
+        "offset": { "x": -250, "y": 620 }
+      }
+    },
+    {
+      "name": "connect_to_backup",
+      "type": "connect-call-to",
+      "transitions": [{ "event": "callCompleted" }, { "event": "hangup" }],
+      "properties": {
+        "noun": "number",
+        "to": "REPLACE_ME_BACKUP_PHONE",
+        "caller_id": "REPLACE_ME_MAIN_LINE",
+        "timeout": 25,
+        "record": false,
+        "offset": { "x": 250, "y": 620 }
+      }
+    }
+  ],
+  "initial_state": "Trigger",
+  "flags": { "allow_concurrent_calls": true }
+}
