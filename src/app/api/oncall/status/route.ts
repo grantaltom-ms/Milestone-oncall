@@ -1,4 +1,4 @@
-import { getOnCallConfig } from "@/lib/oncall/config";
+import { getOnCallConfig, TWILIO_AUTH_TOKEN_LENGTH } from "@/lib/oncall/config";
 import { maskPhone } from "@/lib/oncall/phone";
 import { resolveDestination } from "@/lib/oncall/routing";
 
@@ -28,6 +28,18 @@ export async function GET(request: Request) {
   const warnings: string[] = [];
   if (!config.mainLine) warnings.push("TWILIO_MAIN_LINE is not set — the caller ID falls back to the number the tenant dialed.");
   if (!config.twilio) warnings.push("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN are not set — webhook signatures cannot be verified and no texts are sent.");
+  if (config.twilio && config.twilio.authToken.length !== TWILIO_AUTH_TOKEN_LENGTH) {
+    // A Twilio SID is two letters plus 32 hex — exactly 34 — so a 34-character
+    // "auth token" is nearly always a SID pasted into the wrong field.
+    const looksLikeSid = /^[A-Z]{2}[0-9a-f]{32}$/.test(config.twilio.authToken);
+    warnings.push(
+      (looksLikeSid
+        ? `TWILIO_AUTH_TOKEN looks like a Twilio SID (it starts with "${config.twilio.authToken.slice(0, 2)}"), not an auth token. `
+        : `TWILIO_AUTH_TOKEN is ${config.twilio.authToken.length} characters; a Twilio auth token is ${TWILIO_AUTH_TOKEN_LENGTH}. `) +
+        "Every call is rejected as an invalid signature until this is corrected. The auth token is 32 hex characters with no letter prefix, " +
+        "revealed by the show/hide toggle next to the Account SID on the Twilio Console home page."
+    );
+  }
   if (!config.google) warnings.push("Google Calendar is not configured — every after-hours call goes to the backup manager.");
   if (!config.backupPhone) warnings.push("ONCALL_BACKUP_PHONE is not set — an unanswered call goes straight to voicemail.");
   if (decision.lookup && !decision.lookup.found && decision.lookup.reason === "event_without_phone") {

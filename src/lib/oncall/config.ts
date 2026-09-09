@@ -19,6 +19,8 @@ export const DEFAULT_TECH_ATTEMPTS = 2;
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com";
 export const TWILIO_API_BASE = "https://api.twilio.com";
+/** Twilio auth tokens are 32 hex characters; any other length is a paste error. */
+export const TWILIO_AUTH_TOKEN_LENGTH = 32;
 
 export type GoogleConfig = {
   serviceAccountEmail: string;
@@ -67,8 +69,14 @@ export type OnCallConfig = {
   allowUnsigned: boolean;
 };
 
+/**
+ * Reads a setting, tolerating the way secrets get pasted into a dashboard:
+ * surrounding quotes come along for the ride surprisingly often, and a quoted
+ * auth token fails signature checks with no clue as to why. None of these
+ * values legitimately begin and end with a quote.
+ */
 function env(name: string): string | null {
-  const value = process.env[name]?.trim();
+  const value = process.env[name]?.trim().replace(/^(["'])([\s\S]*)\1$/, "$2").trim();
   return value ? value : null;
 }
 

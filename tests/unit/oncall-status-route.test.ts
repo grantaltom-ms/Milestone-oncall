@@ -70,6 +70,27 @@ describe("GET /api/oncall/status", () => {
     expect(body.warnings.join(" ")).toContain("Mike on call");
   });
 
+  it("calls out a SID pasted into the auth token field, the way it actually happens", async () => {
+    // Assembled rather than written out: a literal SID here is a real credential
+    // shape, and secret scanning rightly refuses to let one into the repository.
+    vi.stubEnv("TWILIO_AUTH_TOKEN", `AC${"0123456789abcdef".repeat(2)}`); // 34 chars: a SID
+    const warnings: string[] = (await (await status()).json()).warnings;
+    expect(warnings.join(" ")).toContain('looks like a Twilio SID (it starts with "AC")');
+    expect(warnings.join(" ")).toContain("32 hex characters with no letter prefix");
+  });
+
+  it("flags a token of the wrong length even when it is not a SID", async () => {
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "too-short");
+    const warnings: string[] = (await (await status()).json()).warnings;
+    expect(warnings.join(" ")).toContain("is 9 characters; a Twilio auth token is 32");
+  });
+
+  it("says nothing about a token of the right length", async () => {
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "a".repeat(32));
+    const warnings: string[] = (await (await status()).json()).warnings;
+    expect(warnings.join(" ")).not.toContain("auth token is 32");
+  });
+
   it("lists the settings that still need filling in", async () => {
     vi.stubEnv("TWILIO_MAIN_LINE", "");
     vi.stubEnv("ONCALL_BACKUP_PHONE", "");

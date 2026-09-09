@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { getOnCallConfig } from "@/lib/oncall/config";
 import { findPhoneIn, formatUS, maskPhone, toE164 } from "@/lib/oncall/phone";
 
 describe("toE164", () => {
@@ -48,5 +49,34 @@ describe("formatUS / maskPhone", () => {
     expect(formatUS(null)).toBe("unknown");
     expect(maskPhone("+12065551234")).toBe("•••-1234");
     expect(maskPhone(null)).toBeNull();
+  });
+});
+
+describe("reading settings that were pasted with quotes", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("strips surrounding quotes from a secret, which otherwise breaks every call", () => {
+    const token = "a".repeat(32);
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC1");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", `"${token}"`);
+    expect(getOnCallConfig().twilio?.authToken).toBe(token);
+
+    vi.stubEnv("TWILIO_AUTH_TOKEN", `'${token}'`);
+    expect(getOnCallConfig().twilio?.authToken).toBe(token);
+
+    vi.stubEnv("TWILIO_AUTH_TOKEN", `  ${token}  `);
+    expect(getOnCallConfig().twilio?.authToken).toBe(token);
+  });
+
+  it("leaves an unquoted value exactly as it is", () => {
+    const token = "b".repeat(32);
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC1");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", token);
+    expect(getOnCallConfig().twilio?.authToken).toBe(token);
+  });
+
+  it("strips quotes off a phone number too", () => {
+    vi.stubEnv("TWILIO_MAIN_LINE", '"+12062020443"');
+    expect(getOnCallConfig().mainLine).toBe("+12062020443");
   });
 });
