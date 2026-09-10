@@ -1,12 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  SHIFT_DAYS,
+  addDays,
+  daysForShift,
+  nextOpenDay,
+  shiftLengthDays,
+  shiftWindow,
+} from "@/lib/oncall/handoff";
 
 /**
  * The scheduling dashboard: who is on call, when, and an honest view of the
  * gaps. Everything here writes real Google Calendar events, so a shift added
  * on this page and one typed into Google Calendar on a phone are the same
  * thing — and the phone line picks either up within seconds.
+ *
+ * The form asks for days, never times. Every handoff is at 8:00 AM, so a
+ * coordinator picks Monday through Sunday and the exact instants are worked
+ * out here rather than typed in five times and mistyped once.
  */
 
 type Shift = { id: string; techName: string; phone: string | null; start: string; end: string };
@@ -23,27 +35,6 @@ function fmt(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-/** A datetime-local value for the next Friday at 5pm, the usual handoff. */
-function nextFridayAt5(from = new Date()): string {
-  const date = new Date(from);
-  date.setSeconds(0, 0);
-  date.setHours(17, 0);
-  const daysUntilFriday = (5 - date.getDay() + 7) % 7;
-  date.setDate(date.getDate() + (daysUntilFriday === 0 && from.getHours() >= 17 ? 7 : daysUntilFriday));
-  return toLocalInput(date);
-}
-
-function toLocalInput(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function addDays(localInput: string, days: number): string {
-  const date = new Date(localInput);
-  date.setDate(date.getDate() + days);
-  return toLocalInput(date);
 }
 
 type Problem = { kind: "gap" | "overlap"; from: string; to: string };
@@ -111,9 +102,13 @@ export default function SchedulePage() {
   const [rosterError, setRosterError] = useState<string | null>(null);
 
   const [techId, setTechId] = useState("");
-  const [start, setStart] = useState(() => nextFridayAt5());
-  const [end, setEnd] = useState(() => addDays(nextFridayAt5(), 7));
+  // Days, not instants: `YYYY-MM-DD`, with `lastDay` inclusive. Filled in once
+  // the calendar has loaded, so the form opens on the first uncovered week
+  // instead of a date picked before we knew what was already scheduled.
+  const [firstDay, setFirstDay] = useState("");
+  const [lastDay, setLastDay] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  const seeded = useRef(false);
 
   // Fetching is kept free of setState so it can run inside an effect without
   // cascading renders; the result is applied afterwards, in one pass.
@@ -124,6 +119,12 @@ export default function SchedulePage() {
     if (result.techs) {
       setTechs(result.techs);
       setTechId((current) => current || result.techs?.[0]?.id || "");
+    }
+    if (result.authed && !seeded.current) {
+      seeded.current = true;
+      const day = nextOpenDay((result.shifts ?? []).map((shift) => shift.end), new Date(result.now));
+      setFirstDay(day);
+      setLastDay(addDays(day, SHIFT_DAYS - 1));
     }
     setError(result.error ?? null);
     setRosterError(result.rosterError ?? null);
@@ -140,6 +141,16 @@ export default function SchedulePage() {
   }, [applyResult, reloadKey]);
 
   const reload = useCallback(() => setReloadKey((n) => n + 1), []);
+
+  // Spelling out the instants those two days turn into: the 8:00 AM boundary
+  // is the whole convention, and it should never be a thing you have to know.
+  const preview = useMemo(() => {
+    if (!firstDay || !lastDay) return null;
+    const days = shiftLengthDays(firstDay, lastDay);
+    if (days <= 0) return { days, from: "", to: "" };
+    const span = shiftWindow(firstDay, lastDay);
+    return { days, from: fmt(span.start.toISOString()), to: fmt(span.end.toISOString()) };
+  }, [firstDay, lastDay]);
 
   async function signIn(event: React.FormEvent) {
     event.preventDefault();
@@ -166,14 +177,19 @@ export default function SchedulePage() {
       setError("Pick a technician.");
       return;
     }
+    if (!preview || preview.days <= 0) {
+      setError("Pick a last day on or after the first day.");
+      return;
+    }
     setBusy(true);
     setError(null);
 
+    const span = shiftWindow(firstDay, lastDay);
     const payload = {
       techName: tech.name,
       phone: tech.phone,
-      start: new Date(start).toISOString(),
-      end: new Date(end).toISOString(),
+      start: span.start.toISOString(),
+      end: span.end.toISOString(),
     };
     const res = await fetch(
       editing ? `/api/schedule/shifts/${encodeURIComponent(editing)}` : "/api/schedule/shifts",
@@ -187,6 +203,13 @@ export default function SchedulePage() {
     if (!res.ok) {
       setError((await res.json()).error ?? "Could not save that shift.");
       return;
+    }
+    if (!editing) {
+      // Roll the form on to the week that just opened up, so adding the whole
+      // rotation is five clicks on the name and five on Add shift.
+      const next = addDays(lastDay, 1);
+      setFirstDay(next);
+      setLastDay(addDays(next, SHIFT_DAYS - 1));
     }
     setEditing(null);
     reload();
@@ -205,8 +228,9 @@ export default function SchedulePage() {
 
   function beginEdit(shift: Shift) {
     setEditing(shift.id);
-    setStart(toLocalInput(new Date(shift.start)));
-    setEnd(toLocalInput(new Date(shift.end)));
+    const days = daysForShift(shift.start, shift.end);
+    setFirstDay(days.firstDay);
+    setLastDay(days.lastDay);
     const match = techs.find((t) => t.name === shift.techName);
     if (match) setTechId(match.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -284,18 +308,49 @@ export default function SchedulePage() {
             </select>
           </div>
           <div>
-            <label className="label" htmlFor="start">Starts</label>
-            <input id="start" className="input" type="datetime-local" value={start}
-              onChange={(e) => { setStart(e.target.value); if (!editing) setEnd(addDays(e.target.value, 7)); }} />
+            <label className="label" htmlFor="first-day">First day</label>
+            <input
+              id="first-day"
+              className="input"
+              type="date"
+              value={firstDay}
+              onChange={(e) => {
+                setFirstDay(e.target.value);
+                if (!editing && e.target.value) setLastDay(addDays(e.target.value, SHIFT_DAYS - 1));
+              }}
+            />
           </div>
           <div>
-            <label className="label" htmlFor="end">Ends</label>
-            <input id="end" className="input" type="datetime-local" value={end}
-              onChange={(e) => setEnd(e.target.value)} />
+            <label className="label" htmlFor="last-day">Last day</label>
+            <input
+              id="last-day"
+              className="input"
+              type="date"
+              value={lastDay}
+              min={firstDay || undefined}
+              onChange={(e) => setLastDay(e.target.value)}
+            />
           </div>
         </div>
+        {preview && (
+          <p className={preview.days > 0 ? "lede" : "warn"}>
+            {preview.days > 0 ? (
+              <>
+                On call from <strong>{preview.from}</strong> to <strong>{preview.to}</strong> —{" "}
+                {preview.days} {preview.days === 1 ? "day" : "days"}. Handoff is 8:00 AM, so the last
+                day is covered overnight and the next person takes over that morning.
+              </>
+            ) : (
+              <>The last day is before the first day.</>
+            )}
+          </p>
+        )}
         <div className="actions">
-          <button className="btn" type="submit" disabled={busy || techs.length === 0}>
+          <button
+            className="btn"
+            type="submit"
+            disabled={busy || techs.length === 0 || !preview || preview.days <= 0}
+          >
             {busy ? "Saving…" : editing ? "Save changes" : "Add shift"}
           </button>
           {editing && (

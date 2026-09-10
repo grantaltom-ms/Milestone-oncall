@@ -14,8 +14,9 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
-  // Every test drives the webhook over HTTP with the `request` fixture, so no
-  // browser is launched and CI does not need to install one.
+  // Most tests drive the API over HTTP with the `request` fixture and launch no
+  // browser at all; `schedule-form.spec.ts` is the exception, because the
+  // scheduling form is something a person clicks.
   use: {
     baseURL: "http://localhost:3000",
     trace: "retain-on-failure",

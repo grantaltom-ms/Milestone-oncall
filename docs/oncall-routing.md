@@ -77,13 +77,22 @@ do the escalation ladder or the texts.)
 
 ## Running the rotation week to week
 
-Each shift is an ordinary calendar event on the on-call calendar:
+The easy way is the dashboard at `/schedule`. Pick a technician, a first day
+and a last day — no times. Every shift starts at **8:00 AM on the first day**
+and ends at **8:00 AM the morning after the last day**, so Monday through
+Sunday means Monday 8:00 AM to the following Monday 8:00 AM, and the person
+covers the last night of their week. The form spells the window out under the
+date boxes before you save it, and after each save it moves on to the week that
+just opened up, so a five-week rotation is five names and five clicks.
+
+Behind the dashboard, each shift is an ordinary calendar event on the on-call
+calendar, and one added by hand works exactly the same:
 
 | Field | What to put |
 | --- | --- |
 | Title | The tech's name — `Mike Alvarez` |
 | Location | Their cell number — `206-555-0134` (any format works) |
-| When | The shift, e.g. Fri 5:00pm → Mon 8:00am |
+| When | The shift, e.g. Mon 8:00am → Mon 8:00am |
 
 Repeat weekly and the rotation runs itself. Rules the app follows:
 
@@ -93,6 +102,8 @@ Repeat weekly and the rotation runs itself. Rules the app follows:
 - A shift with no phone number in it is ignored — the call goes to the backup
   manager and the status page names the offending event.
 - Deleting or cancelling an event takes effect on the very next call.
+- Editing a hand-typed shift on the dashboard snaps it to the 8:00 AM handoff,
+  since the form only deals in whole days.
 
 Check the current state any time:
 
