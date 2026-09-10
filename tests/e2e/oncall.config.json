@@ -5,6 +5,7 @@
   "backupPhone": "+12065550199",
   "tenant": "+12065559876",
   "statusKey": "e2e-status-key",
+  "dashboardPassword": "e2e-dashboard-password",
   "techA": { "name": "Mike Alvarez", "phone": "+12065550134" },
   "techB": { "name": "Dana Kim", "phone": "+12065550175" }
 }

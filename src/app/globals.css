@@ -104,3 +104,88 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;
 }
+
+/* Scheduling dashboard */
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.75rem;
+}
+
+.label {
+  color: var(--muted);
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.input {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  width: 100%;
+}
+
+.btn {
+  background: var(--fg);
+  border: 1px solid var(--fg);
+  border-radius: 8px;
+  color: var(--bg);
+  cursor: pointer;
+  font: inherit;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.9rem;
+}
+
+.btn[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn-quiet {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--fg);
+  margin-top: 0;
+  padding: 0.3rem 0.6rem;
+}
+
+.row-form {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.6rem 0;
+  vertical-align: top;
+}
+
+.right {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .row-form {
+    grid-template-columns: 1fr;
+  }
+}

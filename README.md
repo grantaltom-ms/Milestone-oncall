@@ -38,6 +38,30 @@ backup manager, then voicemail.
 | `POST /api/twilio/voicemail` | Twilio's recording callback. Texts the voicemail link to the notify list. |
 | `GET /api/oncall/status` | Who is on call right now, as JSON, plus a config self-check. Full phone numbers only with `ONCALL_API_KEY`. |
 | `/` | The same answer as a page: who picks up now, and anything still missing from setup. Names and last-four only. |
+| `/schedule` | The scheduling dashboard — add, edit and delete shifts, with coverage gaps flagged. Behind a shared password; disabled entirely when `ONCALL_DASHBOARD_PASSWORD` is unset. |
+
+## Scheduling the rotation
+
+A shift is an ordinary Google Calendar event: the technician's name is the
+title, their number is the location. That stays true whichever way it was
+created, so a shift added on `/schedule` and one typed into Google Calendar on
+a phone are the same thing, and either can be edited from either place.
+
+The dashboard adds what a calendar cannot: a roster so numbers are picked
+rather than retyped, validation that refuses a number the line could not dial,
+and **gap detection** — the uncovered Saturday that is otherwise invisible
+until a tenant finds it.
+
+It needs two things beyond the phone line's own setup:
+
+1. The calendar shared with the service account as **"Make changes to events"**
+   rather than "See all event details".
+2. The `oncall_techs` table — run [`docs/oncall-techs.sql`](docs/oncall-techs.sql)
+   in the Supabase SQL editor.
+
+The phone line never reads the roster. Each shift carries its own phone number
+on the calendar event, so routing keeps working if Supabase is unreachable or a
+technician is later removed.
 
 ## Configuration
 
@@ -52,6 +76,8 @@ for the full list with defaults. The six that matter:
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` / `GOOGLE_CALENDAR_ID` | Read access to the rotation calendar. |
 | `ONCALL_OFFICE_PHONE` | Business-hours destination. Blank means 24/7 rotation. |
 | `ONCALL_API_KEY` | Required before the status endpoint reveals full numbers. |
+| `ONCALL_DASHBOARD_PASSWORD` | Unlocks `/schedule`. Unset means the dashboard is off, not open. |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | The technician roster. Server-only; the service-role key bypasses row-level security. |
 
 A request without a valid `X-Twilio-Signature` is refused, so the rotation
 cannot be harvested by probing the endpoint. Route handlers are capped at 15
@@ -102,6 +128,11 @@ src/lib/oncall/twilio.ts        verifies Twilio's signature; sends texts
 src/lib/oncall/twiml.ts         builds the XML Twilio expects back
 src/lib/oncall/phone.ts         phone-number normalizing, formatting, masking
 src/lib/oncall/config.ts        every setting, read fresh on each request
+src/app/schedule                the scheduling dashboard (shared password)
+src/app/api/schedule            sign-in, roster, and shift create/edit/delete
+src/lib/oncall/roster.ts        technician roster from Supabase (dashboard only)
+src/lib/oncall/session.ts       signed-cookie sessions for the dashboard
+docs/oncall-techs.sql           the roster table migration
 docs/oncall-routing.md          setup and week-to-week runbook
 twilio/studio-flow.json         optional drag-and-drop alternative to the webhook
 ```
