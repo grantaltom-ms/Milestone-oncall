@@ -27,6 +27,22 @@ const { privateKey } = generateKeyPairSync("rsa", {
 let calendarItems = [];
 let calendarStatus = 200;
 let sentSms = [];
+let techs = [];
+let nextEventId = 1;
+
+/**
+ * Google filters events server-side by the time window. The stand-in does the
+ * same, so a shift created for next week does not answer a call today. Items
+ * without a start/end are treated as always covering — the routing tests set
+ * those directly and predate shift scheduling.
+ */
+function overlapsWindow(item, timeMin, timeMax) {
+  const start = item.start?.dateTime ?? item.start?.date;
+  const end = item.end?.dateTime ?? item.end?.date;
+  if (!start || !end) return true;
+  if (!timeMin || !timeMax) return true;
+  return new Date(start) < new Date(timeMax) && new Date(end) > new Date(timeMin);
+}
 
 const readBody = (req) =>
   new Promise((resolve) => {
@@ -47,7 +63,32 @@ const mock = createServer(async (req, res) => {
 
   if (url.pathname.startsWith("/calendar/v3/calendars/")) {
     if (calendarStatus !== 200) return json(res, { error: "calendar down" }, calendarStatus);
-    return json(res, { items: calendarItems });
+
+    const eventId = url.pathname.split("/events/")[1];
+    if (req.method === "POST") {
+      const event = { id: `evt-${nextEventId++}`, ...JSON.parse((await readBody(req)) || "{}") };
+      calendarItems.push(event);
+      return json(res, event, 200);
+    }
+    if (req.method === "PATCH" && eventId) {
+      const event = calendarItems.find((item) => item.id === decodeURIComponent(eventId));
+      if (!event) return json(res, { error: "not found" }, 404);
+      Object.assign(event, JSON.parse((await readBody(req)) || "{}"));
+      return json(res, event);
+    }
+    if (req.method === "DELETE" && eventId) {
+      calendarItems = calendarItems.filter((item) => item.id !== decodeURIComponent(eventId));
+      res.writeHead(204);
+      return res.end();
+    }
+
+    const timeMin = url.searchParams.get("timeMin");
+    const timeMax = url.searchParams.get("timeMax");
+    return json(res, { items: calendarItems.filter((item) => overlapsWindow(item, timeMin, timeMax)) });
+  }
+
+  if (url.pathname === "/rest/v1/oncall_techs") {
+    return json(res, techs);
   }
 
   if (url.pathname.endsWith("/Messages.json")) {
@@ -61,10 +102,11 @@ const mock = createServer(async (req, res) => {
       const next = JSON.parse((await readBody(req)) || "{}");
       if (next.items !== undefined) calendarItems = next.items;
       if (next.calendarStatus !== undefined) calendarStatus = next.calendarStatus;
+      if (next.techs !== undefined) techs = next.techs;
       if (next.reset) sentSms = [];
       return json(res, { ok: true });
     }
-    return json(res, { items: calendarItems, calendarStatus, sms: sentSms });
+    return json(res, { items: calendarItems, calendarStatus, sms: sentSms, techs });
   }
 
   json(res, { error: `unexpected ${req.method} ${url.pathname}` }, 404);
@@ -90,6 +132,9 @@ mock.listen(config.mockPort, "127.0.0.1", () => {
       GOOGLE_CALENDAR_ID: "maintenance@milestoneprop.com",
       GOOGLE_OAUTH_TOKEN_URL: `${base}/token`,
       GOOGLE_CALENDAR_API_BASE: base,
+      SUPABASE_URL: base,
+      SUPABASE_SERVICE_ROLE_KEY: "e2e-service-role-key",
+      ONCALL_DASHBOARD_PASSWORD: config.dashboardPassword,
     },
   });
 

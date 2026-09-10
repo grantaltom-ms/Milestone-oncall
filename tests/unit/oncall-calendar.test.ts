@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
-import { getAccessToken, lookupOnCall, resetGoogleTokenCache } from "@/lib/oncall/calendar";
+import { getAccessToken, lookupOnCall, READ_SCOPE, resetGoogleTokenCache } from "@/lib/oncall/calendar";
 import type { GoogleConfig } from "@/lib/oncall/config";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
@@ -60,7 +60,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("getAccessToken", () => {
   it("signs a service-account JWT Google can actually verify", async () => {
     const { calls } = mockGoogle({});
-    await getAccessToken(google, NOW);
+    await getAccessToken(google, READ_SCOPE, NOW);
 
     const assertion = new URLSearchParams(calls[0].body).get("assertion")!;
     const [header, claims, signature] = assertion.split(".");

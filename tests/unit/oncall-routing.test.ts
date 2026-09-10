@@ -35,6 +35,8 @@ function config(overrides: Partial<OnCallConfig> = {}): OnCallConfig {
     twilio: { accountSid: "AC1", authToken: "secret", apiBase: "https://twilio.test" },
     publicBaseUrl: null,
     statusApiKey: null,
+    supabase: null,
+    dashboardPassword: null,
     allowUnsigned: false,
     ...overrides,
   };

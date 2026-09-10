@@ -30,6 +30,12 @@ export type GoogleConfig = {
   apiBase: string;
 };
 
+export type SupabaseConfig = {
+  url: string;
+  /** Server-only: bypasses row-level security. Never expose to the browser. */
+  serviceRoleKey: string;
+};
+
 export type TwilioConfig = {
   accountSid: string;
   authToken: string;
@@ -65,6 +71,10 @@ export type OnCallConfig = {
   publicBaseUrl: string | null;
   /** Shared secret required before /api/oncall/status will reveal full phone numbers. */
   statusApiKey: string | null;
+  /** Technician roster for the scheduling dashboard. The phone line never reads it. */
+  supabase: SupabaseConfig | null;
+  /** Password for the scheduling dashboard. Without it the dashboard is disabled entirely. */
+  dashboardPassword: string | null;
   /** Local/CI escape hatch: answer webhooks that carry no Twilio signature. Never set in production. */
   allowUnsigned: boolean;
 };
@@ -133,6 +143,9 @@ export function getOnCallConfig(): OnCallConfig {
 
   const mainLine = envPhone("TWILIO_MAIN_LINE");
 
+  const supabaseUrl = env("SUPABASE_URL");
+  const supabaseKey = env("SUPABASE_SERVICE_ROLE_KEY");
+
   return {
     mainLine,
     officePhone: envPhone("ONCALL_OFFICE_PHONE"),
@@ -163,6 +176,9 @@ export function getOnCallConfig(): OnCallConfig {
     companyName: env("ONCALL_COMPANY_NAME") ?? "Milestone Properties",
     publicBaseUrl: env("ONCALL_PUBLIC_BASE_URL")?.replace(/\/+$/, "") ?? null,
     statusApiKey: env("ONCALL_API_KEY"),
+    supabase:
+      supabaseUrl && supabaseKey ? { url: supabaseUrl, serviceRoleKey: supabaseKey } : null,
+    dashboardPassword: env("ONCALL_DASHBOARD_PASSWORD"),
     allowUnsigned: envBool("ONCALL_ALLOW_UNSIGNED", false),
   };
 }
