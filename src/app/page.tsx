@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getOnCallConfig } from "@/lib/oncall/config";
 import { maskPhone } from "@/lib/oncall/phone";
 import { resolveDestination } from "@/lib/oncall/routing";
@@ -41,6 +43,10 @@ export default async function Page() {
         office number on their phone.
       </p>
 
+      <p className="actions">
+        <Link className="btn" href="/schedule">Open the scheduling dashboard</Link>
+      </p>
+
       <div className="card">
         <dl>
           <div className="row">
@@ -77,8 +83,10 @@ export default async function Page() {
       )}
 
       <p className="lede">
-        Full details, with phone numbers, at <code>/api/oncall/status?key=…</code>. Setup and the
-        week-to-week runbook are in <code>docs/oncall-routing.md</code>.
+        This page is read-only — adding and changing shifts happens on the{" "}
+        <Link href="/schedule">scheduling dashboard</Link>, which asks for a password. Full details,
+        with phone numbers, at <code>/api/oncall/status?key=…</code>. Setup and the week-to-week
+        runbook are in <code>docs/oncall-routing.md</code>.
       </p>
     </main>
   );

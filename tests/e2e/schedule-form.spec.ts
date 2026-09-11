@@ -44,6 +44,30 @@ async function signIn(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: "Add a shift" })).toBeVisible();
 }
 
+test.describe("finding the dashboard", () => {
+  test("the landing page points at the dashboard", async ({ page, request }) => {
+    await resetMock(request);
+    // The landing page is read-only by design, so the only way to the form is a
+    // link — without one, someone typing the bare domain finds a dead end.
+    await page.goto(`${APP}/`);
+    const link = page.getByRole("link", { name: /scheduling dashboard/i }).first();
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+  });
+
+  test("says so when it cannot reach the schedule, instead of loading forever", async ({ page, request }) => {
+    await resetMock(request);
+    await page.route("**/api/schedule/shifts**", (route) => route.abort());
+
+    await page.goto(`${APP}/schedule`);
+    // The failure has to resolve into something a person can act on.
+    await expect(page.getByText(/Could not reach the schedule/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page.getByText("Loading…")).toHaveCount(0);
+  });
+});
+
 test.describe("the shift form", () => {
   test("asks for days only, and writes an 8:00 AM handoff", async ({ page, request }) => {
     await resetMock(request);
