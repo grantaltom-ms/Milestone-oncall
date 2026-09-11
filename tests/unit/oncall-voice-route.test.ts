@@ -123,7 +123,10 @@ describe("POST /api/twilio/voice — the first ring", () => {
   it("still connects a blocked caller, and says so in the text", async () => {
     const xml = await xmlOf(await call("/api/twilio/voice", { From: "anonymous" }));
     expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
-    expect(sentSms[0].body).toContain("blocked or unknown number");
+    // No number to quote, so the text must say what to do instead of pointing
+    // at one that is not there.
+    expect(sentSms[0].body).toContain("came through blocked");
+    expect(sentSms[0].body).toContain("Get a callback number on the call");
   });
 
   it("uses the number the tenant dialed as caller ID when the main line is not configured", async () => {

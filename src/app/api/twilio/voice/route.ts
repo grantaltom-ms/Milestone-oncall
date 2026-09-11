@@ -55,6 +55,22 @@ function voicemail(config: OnCallConfig): string {
 }
 
 /**
+ * The message texted to whoever is about to be rung. The number goes on its own
+ * labelled line: this is read one-handed at 2am, and "call them back on this
+ * number" in a text sent *from* the office line is exactly the wrong number to
+ * reach the resident on. A line of its own also makes it tappable.
+ *
+ * Exported for tests — the wording is the product here, not an implementation
+ * detail, and it is the one thing in the system a technician actually reads.
+ */
+export function incomingCallMessage(companyName: string, callerNumber: string | null): string {
+  const opening = `${companyName} after-hours: maintenance call ringing you now.`;
+  return callerNumber
+    ? `${opening}\nResident callback: ${formatUS(callerNumber)}\nYour screen shows the office line, not the resident's.`
+    : `${opening}\nResident's number came through blocked. Get a callback number on the call.`;
+}
+
+/**
  * Texts the person we are about to ring, because the caller ID they see is the
  * office line rather than the tenant's number.
  */
@@ -66,11 +82,7 @@ async function textIncomingCaller(
   const sender = smsSender(config);
   if (!sender) return;
 
-  const who = callerNumber ? formatUS(callerNumber) : "a blocked or unknown number";
-  const body =
-    `${config.companyName} after-hours: maintenance call from ${who} is ringing you now. ` +
-    "Your phone shows the office line, so call the tenant back on this number.";
-
+  const body = incomingCallMessage(config.companyName, callerNumber);
   const result = await sendSms(sender.twilio, { to, from: sender.from, body });
   if (!result.ok) log({ stage: "sms", ok: false, to, error: result.error });
 }
