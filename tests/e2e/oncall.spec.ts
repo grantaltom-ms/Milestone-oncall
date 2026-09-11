@@ -64,7 +64,8 @@ test.describe("after-hours maintenance line", () => {
     const { sms } = await mockState(request);
     expect(sms).toHaveLength(1);
     expect(sms[0]).toMatchObject({ to: config.techA.phone, from: config.mainLine });
-    expect(sms[0].body).toContain("(206) 555-9876");
+    // The number on its own labelled line — tappable, and unmistakable at 2am.
+    expect(sms[0].body).toContain("\nResident callback: (206) 555-9876\n");
 
     // Tech answers; when the call ends Twilio asks what is next and gets "nothing".
     const done = await twilioCall(request, nextStep(xml)!, { DialCallStatus: "completed" });
