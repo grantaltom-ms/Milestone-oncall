@@ -132,9 +132,19 @@ export default function SchedulePage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchSchedule().then((result) => {
-      if (!cancelled) applyResult(result);
-    });
+    fetchSchedule()
+      .catch((error: unknown): LoadResult => ({
+        // Without this the promise rejects, `authed` stays null, and the page
+        // sits on "Loading…" forever — no sign-in form, no error, no clue.
+        // Fall back to the signed-out view: it says what went wrong and still
+        // offers the one control that can recover, which "Loading…" never does.
+        authed: false,
+        now: Date.now(),
+        error: `Could not reach the schedule: ${error instanceof Error ? error.message : "unknown error"}. Try signing in again.`,
+      }))
+      .then((result) => {
+        if (!cancelled) applyResult(result);
+      });
     return () => {
       cancelled = true;
     };
