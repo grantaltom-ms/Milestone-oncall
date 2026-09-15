@@ -29,6 +29,10 @@ let calendarStatus = 200;
 let sentSms = [];
 let techs = [];
 let nextEventId = 1;
+/** Tenant directory rows, keyed the way the real view exposes them. */
+let directory = [];
+/** Rows the Twilio webhooks have filed in the call log. */
+let callLog = [];
 
 /**
  * Google filters events server-side by the time window. The stand-in does the
@@ -91,6 +95,37 @@ const mock = createServer(async (req, res) => {
     return json(res, techs);
   }
 
+  if (url.pathname === "/rest/v1/oncall_caller_lookup") {
+    // PostgREST filter syntax: ?phone10=eq.2065559876
+    const wanted = (url.searchParams.get("phone10") ?? "").replace(/^eq\./, "");
+    return json(res, directory.filter((row) => row.phone10 === wanted));
+  }
+
+  if (url.pathname === "/rest/v1/oncall_calls") {
+    if (req.method === "POST") {
+      const row = JSON.parse((await readBody(req)) || "{}");
+      // The real table merges on recording_sid; so does this.
+      callLog = callLog.filter((existing) => existing.recording_sid !== row.recording_sid);
+      callLog.push({ id: `call-${callLog.length + 1}`, ...row });
+      res.writeHead(201);
+      return res.end();
+    }
+    const newestFirst = [...callLog].sort((a, b) =>
+      String(b.started_at ?? "").localeCompare(String(a.started_at ?? ""))
+    );
+    return json(res, newestFirst);
+  }
+
+  // Twilio's recording media, which /api/calls/[sid]/audio proxies rather than
+  // handing the browser a URL with the account's credentials in it.
+  if (/\/Recordings\/RE[0-9a-f]{32}\.mp3$/i.test(url.pathname)) {
+    if (!(req.headers.authorization ?? "").startsWith("Basic ")) {
+      return json(res, { error: "unauthenticated" }, 401);
+    }
+    res.writeHead(200, { "content-type": "audio/mpeg", "content-length": "4" });
+    return res.end(Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  }
+
   if (url.pathname.endsWith("/Messages.json")) {
     const form = new URLSearchParams(await readBody(req));
     sentSms.push({ to: form.get("To"), from: form.get("From"), body: form.get("Body") });
@@ -103,10 +138,12 @@ const mock = createServer(async (req, res) => {
       if (next.items !== undefined) calendarItems = next.items;
       if (next.calendarStatus !== undefined) calendarStatus = next.calendarStatus;
       if (next.techs !== undefined) techs = next.techs;
+      if (next.directory !== undefined) directory = next.directory;
+      if (next.callLog !== undefined) callLog = next.callLog;
       if (next.reset) sentSms = [];
       return json(res, { ok: true });
     }
-    return json(res, { items: calendarItems, calendarStatus, sms: sentSms, techs });
+    return json(res, { items: calendarItems, calendarStatus, sms: sentSms, techs, directory, callLog });
   }
 
   json(res, { error: `unexpected ${req.method} ${url.pathname}` }, 404);
@@ -127,6 +164,9 @@ mock.listen(config.mockPort, "127.0.0.1", () => {
       ONCALL_API_KEY: config.statusKey,
       ONCALL_PUBLIC_BASE_URL: "http://localhost:3000",
       ONCALL_VOICEMAIL_NOTIFY: config.backupPhone,
+      // On, so the end-to-end tests cover the whole recorded-call chain: the
+      // consent announcement, the recording callback, the log, and playback.
+      ONCALL_RECORD_CALLS: "true",
       GOOGLE_SERVICE_ACCOUNT_EMAIL: "oncall@milestone.iam.gserviceaccount.com",
       GOOGLE_PRIVATE_KEY: privateKey.replace(/\n/g, "\\n"),
       GOOGLE_CALENDAR_ID: "maintenance@milestoneprop.com",

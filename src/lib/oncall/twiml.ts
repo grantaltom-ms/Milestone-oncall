@@ -38,6 +38,14 @@ export function dial(options: {
   callerId: string | null;
   timeoutSeconds: number;
   action: string;
+  /**
+   * Twilio's recording mode — `record-from-answer-dual` captures both sides on
+   * separate channels and starts only once someone picks up, so an unanswered
+   * ring leaves no empty file behind. Omitted means the leg is not recorded.
+   */
+  record?: string | null;
+  /** Where Twilio posts the finished recording. Required for `record` to be useful. */
+  recordingStatusCallback?: string | null;
 }): string {
   // answerOnBridge keeps the tenant hearing a real ringing tone instead of
   // silence, and stops Twilio billing the leg as answered before anyone picks up.
@@ -47,11 +55,24 @@ export function dial(options: {
     action: options.action,
     method: "POST",
     answerOnBridge: "true",
+    record: options.record,
+    recordingStatusCallback: options.record ? options.recordingStatusCallback : null,
+    recordingStatusCallbackMethod: options.record ? "POST" : null,
+    recordingStatusCallbackEvent: options.record ? "completed" : null,
   });
   return `<Dial${dialAttrs}><Number>${escapeXml(options.to)}</Number></Dial>`;
 }
 
-export function record(options: { action: string; maxLengthSeconds?: number }): string {
+export function record(options: {
+  action: string;
+  maxLengthSeconds?: number;
+  /**
+   * Where the finished recording is posted. Twilio's recording callback does
+   * not carry the caller's number, so the route that needs it takes it in the
+   * query string — which is why this is a parameter rather than a constant.
+   */
+  recordingStatusCallback?: string;
+}): string {
   return `<Record${attrs({
     action: options.action,
     method: "POST",
@@ -60,7 +81,7 @@ export function record(options: { action: string; maxLengthSeconds?: number }): 
     trim: "trim-silence",
     // Without an explicit action Twilio re-requests the current URL and the
     // greeting plays forever.
-    recordingStatusCallback: "/api/twilio/voicemail",
+    recordingStatusCallback: options.recordingStatusCallback ?? "/api/twilio/voicemail",
     recordingStatusCallbackEvent: "completed",
   })}/>`;
 }

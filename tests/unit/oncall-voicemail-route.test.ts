@@ -4,9 +4,15 @@ import { computeTwilioSignature } from "@/lib/oncall/twilio";
 
 const AUTH_TOKEN = "test-auth-token";
 let sentSms: { to: string; body: string }[] = [];
+let logged: Record<string, unknown>[] = [];
+let directoryRows: Record<string, unknown>[] = [];
 
-function callback(params: Record<string, string>, options: { signature?: string } = {}) {
-  const url = "https://milestone.test/api/twilio/voicemail";
+function callback(
+  params: Record<string, string>,
+  options: { signature?: string; from?: string } = {}
+) {
+  const query = options.from ? `?from=${encodeURIComponent(options.from)}` : "";
+  const url = `https://milestone.test/api/twilio/voicemail${query}`;
   const body = {
     CallSid: "CA-test",
     From: "+12065559876",
@@ -30,9 +36,17 @@ function callback(params: Record<string, string>, options: { signature?: string 
 
 beforeEach(() => {
   sentSms = [];
+  logged = [];
+  directoryRows = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("oncall_caller_lookup")) return Response.json(directoryRows);
+      if (url.includes("oncall_calls")) {
+        logged.push(JSON.parse(String(init?.body)));
+        return new Response(null, { status: 201 });
+      }
       const form = new URLSearchParams(String(init?.body));
       sentSms.push({ to: form.get("To") ?? "", body: form.get("Body") ?? "" });
       return Response.json({ sid: "SM1" }, { status: 201 });
@@ -77,5 +91,40 @@ describe("POST /api/twilio/voicemail", () => {
     const response = await callback({}, { signature: "forged" });
     expect(response.status).toBe(403);
     expect(sentSms).toHaveLength(0);
+  });
+});
+
+describe("POST /api/twilio/voicemail — with the tenant directory", () => {
+  beforeEach(() => {
+    vi.stubEnv("SUPABASE_URL", "https://db.test");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role-key");
+  });
+
+  it("names the unit in the text, so nobody listens just to find out where", async () => {
+    directoryRows = [
+      { property_name: "Willow Lake Apartments", unit: "V - 12", tenant_name: "Kovacs, Nadia" },
+    ];
+    await callback({}, { from: "+12065559876" });
+    expect(sentSms[0].body).toContain("Willow Lake Apartments #V - 12");
+    expect(sentSms[0].body).toContain("(206) 555-9876");
+  });
+
+  it("files the voicemail in the call log as well as texting it", async () => {
+    directoryRows = [
+      { property_name: "Willow Lake Apartments", unit: "V - 12", tenant_name: "Kovacs, Nadia" },
+    ];
+    await callback({}, { from: "+12065559876" });
+    expect(logged[0]).toMatchObject({
+      kind: "voicemail",
+      caller_phone: "+12065559876",
+      unit: "V - 12",
+      match_count: 1,
+      recording_seconds: 42,
+    });
+  });
+
+  it("logs nothing for a hang-up on the beep", async () => {
+    await callback({ RecordingDuration: "1" }, { from: "+12065559876" });
+    expect(logged).toHaveLength(0);
   });
 });

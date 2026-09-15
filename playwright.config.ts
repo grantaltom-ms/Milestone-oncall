@@ -3,9 +3,17 @@ import { defineConfig } from "@playwright/test";
 /**
  * End-to-end tests run against a production build (`next build` must run
  * first). `oncall-server.mjs` starts that server together with local stand-ins
- * for Google Calendar and Twilio's SMS API, so no account, key or spend is
- * involved and results are deterministic.
+ * for Google Calendar, Twilio (SMS and recording media) and Supabase, so no
+ * account, key or spend is involved and results are deterministic.
  */
+
+/**
+ * Environments that ship a Chromium but cannot download another — CI images,
+ * sandboxes — point at theirs here rather than failing the whole suite with
+ * "Executable doesn't exist". Unset everywhere else, which is the normal case.
+ */
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 90_000,
@@ -15,11 +23,12 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   // Most tests drive the API over HTTP with the `request` fixture and launch no
-  // browser at all; `schedule-form.spec.ts` is the exception, because the
-  // scheduling form is something a person clicks.
+  // browser at all; `schedule-form.spec.ts` and part of `calls.spec.ts` are the
+  // exceptions, because those pages are things a person clicks.
   use: {
     baseURL: "http://localhost:3000",
     trace: "retain-on-failure",
+    ...(executablePath ? { launchOptions: { executablePath } } : {}),
   },
   webServer: {
     command: "node tests/e2e/oncall-server.mjs",

@@ -63,6 +63,18 @@ export type OnCallConfig = {
   dialTimeoutSeconds: number;
   /** How many times the on-call tech's phone rings before the backup manager does. */
   techAttempts: number;
+  /**
+   * Record the conversation once someone answers. Off unless explicitly turned
+   * on: Washington is an all-party consent state, so this must never become
+   * true by accident. When on, every caller hears the announcement first.
+   */
+  recordCalls: boolean;
+  /**
+   * Match the caller ID against the tenant directory and put the unit in the
+   * technician's text. On whenever Supabase is configured; here as a switch so
+   * it can be turned off without pulling the whole Supabase config.
+   */
+  callerLookup: boolean;
   google: GoogleConfig | null;
   twilio: TwilioConfig | null;
   /** Company name spoken in the voicemail greeting. */
@@ -159,6 +171,8 @@ export function getOnCallConfig(): OnCallConfig {
     alwaysOnCall: envBool("ONCALL_ALWAYS", false),
     dialTimeoutSeconds: envInt("ONCALL_DIAL_TIMEOUT", DEFAULT_DIAL_TIMEOUT_SECONDS, 5, 60),
     techAttempts: envInt("ONCALL_TECH_ATTEMPTS", DEFAULT_TECH_ATTEMPTS, 1, 3),
+    recordCalls: envBool("ONCALL_RECORD_CALLS", false),
+    callerLookup: envBool("ONCALL_CALLER_LOOKUP", true),
     google:
       serviceAccountEmail && privateKey && calendarId
         ? {
