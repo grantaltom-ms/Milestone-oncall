@@ -128,6 +128,32 @@ export async function readTwilioParams(request: Request): Promise<Record<string,
   return params;
 }
 
+/**
+ * The signature check the two after-the-fact webhooks make — voicemail and
+ * recording. Returns the response to send back when the request should not be
+ * acted on, or null when it checks out.
+ *
+ * Unlike the voice webhook there is no caller waiting on the line here, so an
+ * unverifiable request is simply refused: the payload is a link to a recording
+ * of a resident, and nobody unauthenticated gets to hand us one.
+ */
+export function rejectUnverified(
+  request: Request,
+  config: OnCallConfig,
+  params: Record<string, string>
+): Response | null {
+  if (config.twilio) {
+    const valid = isValidTwilioRequest(
+      candidateUrls(request, config.publicBaseUrl),
+      params,
+      request.headers.get("x-twilio-signature"),
+      config.twilio.authToken
+    );
+    return valid ? null : new Response("Invalid Twilio signature", { status: 403 });
+  }
+  return config.allowUnsigned ? null : new Response("Not configured", { status: 503 });
+}
+
 export function smsSender(config: OnCallConfig): { twilio: TwilioConfig; from: string } | null {
   if (!config.twilio || !config.smsFrom) return null;
   return { twilio: config.twilio, from: config.smsFrom };

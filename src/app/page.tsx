@@ -45,6 +45,7 @@ export default async function Page() {
 
       <p className="actions">
         <Link className="btn" href="/schedule">Open the scheduling dashboard</Link>
+        <Link className="btn btn-quiet" href="/calls">Last night&apos;s calls</Link>
       </p>
 
       <div className="card">
@@ -84,9 +85,10 @@ export default async function Page() {
 
       <p className="lede">
         This page is read-only — adding and changing shifts happens on the{" "}
-        <Link href="/schedule">scheduling dashboard</Link>, which asks for a password. Full details,
-        with phone numbers, at <code>/api/oncall/status?key=…</code>. Setup and the week-to-week
-        runbook are in <code>docs/oncall-routing.md</code>.
+        <Link href="/schedule">scheduling dashboard</Link>, and recordings and voicemails are on the{" "}
+        <Link href="/calls">call log</Link>; both ask for a password. Full details, with phone
+        numbers, at <code>/api/oncall/status?key=…</code>. Setup and the week-to-week runbook are in{" "}
+        <code>docs/oncall-routing.md</code>.
       </p>
     </main>
   );
