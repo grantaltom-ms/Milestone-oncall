@@ -140,6 +140,33 @@ recorded call has to be told. With `ONCALL_RECORD_CALLS=true`:
 A lawyer should look at the wording before this goes live in front of
 residents. It is one environment variable to switch back off.
 
+### The notice technicians get
+
+Give this to every technician before their first shift, in writing, and keep
+the signed copy. The resident's half of the consent is the announcement they
+hear; this is the other half.
+
+> **Recording on the after-hours maintenance line**
+>
+> Calls to the Milestone Properties after-hours maintenance line are recorded,
+> including your side of them. Recording starts when you answer and ends when
+> the call does. Only calls that come through the after-hours rotation are
+> recorded — calls to the office during business hours are not.
+>
+> The resident hears an announcement before the call is connected. This notice
+> is yours: by taking an on-call shift, you agree to be recorded on the calls
+> you answer during it.
+>
+> Recordings are kept in Milestone's phone system and can be played back by
+> office staff who have the on-call dashboard password. They are used to write
+> up work orders and to establish what was said when an incident is disputed.
+> They are not used to monitor your performance call by call.
+>
+> Questions about any of this go to [name] before your next shift.
+
+That last paragraph is a commitment, so keep it only if it is true of how you
+intend to use the recordings.
+
 ### Listening back, and the note that goes into AppFolio
 
 `/calls` lists recorded calls and voicemails newest first, behind the same
