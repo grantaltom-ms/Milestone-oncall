@@ -19,6 +19,9 @@ export const DEFAULT_TECH_ATTEMPTS = 2;
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com";
 export const TWILIO_API_BASE = "https://api.twilio.com";
+export const TWILIO_INTELLIGENCE_BASE = "https://intelligence.twilio.com/v2";
+/** Claude writes the call summaries. Opus 5 unless a deployment says otherwise. */
+export const DEFAULT_SUMMARY_MODEL = "claude-opus-5";
 /** Twilio auth tokens are 32 hex characters; any other length is a paste error. */
 export const TWILIO_AUTH_TOKEN_LENGTH = 32;
 
@@ -40,6 +43,8 @@ export type TwilioConfig = {
   accountSid: string;
   authToken: string;
   apiBase: string;
+  /** Conversational Intelligence lives on its own host; overridable for tests. */
+  intelligenceBase?: string;
 };
 
 export type OnCallConfig = {
@@ -75,6 +80,13 @@ export type OnCallConfig = {
    * it can be turned off without pulling the whole Supabase config.
    */
   callerLookup: boolean;
+  /**
+   * Twilio Conversational Intelligence Service (GA...). Set it and every
+   * recording is transcribed; leave it unset and recordings stay audio-only.
+   */
+  intelligenceServiceSid: string | null;
+  /** Claude writes the summary of each transcript. Without a key there is no summary. */
+  anthropic: { apiKey: string; model: string; baseUrl: string | null } | null;
   google: GoogleConfig | null;
   twilio: TwilioConfig | null;
   /** Company name spoken in the voicemail greeting. */
@@ -155,6 +167,8 @@ export function getOnCallConfig(): OnCallConfig {
 
   const mainLine = envPhone("TWILIO_MAIN_LINE");
 
+  const anthropicKey = env("ANTHROPIC_API_KEY");
+
   const supabaseUrl = env("SUPABASE_URL");
   const supabaseKey = env("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -173,6 +187,14 @@ export function getOnCallConfig(): OnCallConfig {
     techAttempts: envInt("ONCALL_TECH_ATTEMPTS", DEFAULT_TECH_ATTEMPTS, 1, 3),
     recordCalls: envBool("ONCALL_RECORD_CALLS", false),
     callerLookup: envBool("ONCALL_CALLER_LOOKUP", true),
+    intelligenceServiceSid: env("TWILIO_INTELLIGENCE_SERVICE_SID"),
+    anthropic: anthropicKey
+      ? {
+          apiKey: anthropicKey,
+          model: env("ONCALL_SUMMARY_MODEL") ?? DEFAULT_SUMMARY_MODEL,
+          baseUrl: env("ANTHROPIC_BASE_URL"),
+        }
+      : null,
     google:
       serviceAccountEmail && privateKey && calendarId
         ? {
@@ -185,7 +207,12 @@ export function getOnCallConfig(): OnCallConfig {
         : null,
     twilio:
       accountSid && authToken
-        ? { accountSid, authToken, apiBase: env("TWILIO_API_BASE") ?? TWILIO_API_BASE }
+        ? {
+            accountSid,
+            authToken,
+            apiBase: env("TWILIO_API_BASE") ?? TWILIO_API_BASE,
+            intelligenceBase: env("TWILIO_INTELLIGENCE_BASE") ?? TWILIO_INTELLIGENCE_BASE,
+          }
         : null,
     companyName: env("ONCALL_COMPANY_NAME") ?? "Milestone Properties",
     publicBaseUrl: env("ONCALL_PUBLIC_BASE_URL")?.replace(/\/+$/, "") ?? null,

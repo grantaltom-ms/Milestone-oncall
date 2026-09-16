@@ -38,7 +38,8 @@ backup manager, then voicemail.
 | --- | --- |
 | `POST /api/twilio/voice` | The webhook Twilio calls on every ring. Drives the escalation ladder through a `stage` parameter. Point the phone number's "A call comes in" here. |
 | `POST /api/twilio/voicemail` | Twilio's recording callback. Texts the voicemail link, with the unit, to the notify list and files it in the call log. |
-| `POST /api/twilio/recording` | Where a recorded conversation lands when `ONCALL_RECORD_CALLS` is on. Files it under the unit that called. |
+| `POST /api/twilio/recording` | Where a recorded conversation lands when `ONCALL_RECORD_CALLS` is on. Files it under the unit that called, and asks for a transcript. |
+| `POST /api/twilio/transcript` | Where Conversational Intelligence says the words are ready. Believes nothing in the request; reads everything back from Twilio. |
 | `GET /api/oncall/status` | Who is on call right now, as JSON, plus a config self-check. Full phone numbers only with `ONCALL_API_KEY`. |
 | `/` | The same answer as a page: who picks up now, and anything still missing from setup. Names and last-four only. |
 | `/schedule` | The scheduling dashboard — add, edit and delete shifts, with coverage gaps flagged. Behind a shared password; disabled entirely when `ONCALL_DASHBOARD_PASSWORD` is unset. |
@@ -108,6 +109,50 @@ Audio never leaves the password: the page plays it through
 `/api/calls/[sid]/audio`, which fetches from Twilio server-side with the
 account's own credentials and streams it on. No public recording URL, and no
 Twilio token in a browser.
+
+## What the call was about
+
+With `TWILIO_INTELLIGENCE_SERVICE_SID` set, every recording is transcribed by
+Twilio Conversational Intelligence — chosen over a dedicated transcription
+vendor because the audio never leaves Twilio. Dual-channel recording means who
+spoke is a fact rather than a guess, so the transcript comes back labelled:
+
+```
+Resident: There's water coming through the bedroom ceiling.
+Milestone: Can you shut the valve under the kitchen sink?
+Resident: Doing it now.
+```
+
+With `ANTHROPIC_API_KEY` set as well, Claude reads that and writes the summary
+that goes on the card and into the note:
+
+> Resident at Willow Lake reported water coming through the back bedroom
+> ceiling, worsening over about an hour. Technician talked them through the
+> shut-off valve and said he would attend.
+>
+> Urgency: emergency
+> Promised: onsite within the hour
+> Follow-up: check the unit above for the source
+
+The summary is a convenience on top of the transcript, and the code treats it
+that way: a model that is unreachable, slow or unwilling costs the reviewer
+nothing they did not already have. The words are stored either way.
+
+**The transcript webhook believes nothing it is sent.** Twilio does not
+document a signature on the Conversational Intelligence callback, so the post
+is treated as a nudge: the transcript ID is checked for shape, and then the
+status, the recording it belongs to and the words themselves are all read back
+from Twilio over an authenticated request. A forged post costs one wasted API
+call and can change nothing, because none of the data it carries is used.
+
+Run [`docs/oncall-transcripts.sql`](docs/oncall-transcripts.sql) to add the
+columns, and point the Intelligence Service's webhook at
+`/api/twilio/transcript`.
+
+Worth knowing: a transcript is a far more spreadable thing than an audio file —
+searchable, copy-pasteable, easy to forward. It sits behind the same password,
+but how long you keep transcripts is a separate decision from how long you keep
+recordings.
 
 ## Scheduling the rotation
 
@@ -191,6 +236,7 @@ out of `/calls`.
 src/app/api/twilio/voice        the webhook Twilio calls on every ring
 src/app/api/twilio/voicemail    texts a link when a voicemail is left
 src/app/api/twilio/recording    files a recorded call under the unit that made it
+src/app/api/twilio/transcript   stores the words and the summary when they are ready
 src/app/api/oncall/status       who is on call right now, as JSON
 src/app/page.tsx                the same, as a page
 src/lib/oncall/calendar.ts      reads the shift from Google Calendar (service-account JWT, no SDK)
@@ -202,6 +248,8 @@ src/lib/oncall/phone.ts         phone-number normalizing, formatting, masking
 src/lib/oncall/tenants.ts       caller ID → unit, from the tenant directory
 src/lib/oncall/message.ts       the text a technician reads at 2am, inside one SMS
 src/lib/oncall/calls.ts         the call log: written by the webhooks, read by /calls
+src/lib/oncall/intelligence.ts  Twilio Conversational Intelligence: recording in, words out
+src/lib/oncall/summary.ts       the transcript, as the note that goes in a work order
 src/lib/oncall/background.ts    work that runs after the TwiML, never before it
 src/lib/oncall/config.ts        every setting, read fresh on each request
 src/app/schedule                the scheduling dashboard (shared password)
@@ -212,6 +260,7 @@ src/app/calls                   recordings and voicemails, with notes for AppFol
 src/app/api/calls               the call log, and the authenticated audio proxy
 docs/oncall-techs.sql           the roster table migration
 docs/oncall-caller-lookup.sql   the caller-ID lookup view and the call log table
+docs/oncall-transcripts.sql     transcript and summary columns on the call log
 docs/oncall-routing.md          setup and week-to-week runbook
 twilio/studio-flow.json         optional drag-and-drop alternative to the webhook
 ```
@@ -220,3 +269,7 @@ No `googleapis` and no `twilio` SDK: both are handled with `fetch` plus
 `node:crypto` (a service-account JWT for Google, HMAC-SHA1 for Twilio's
 signature). Two HTTPS calls don't justify tens of megabytes in a function that
 has seconds to answer a ringing phone.
+
+The one exception is `@anthropic-ai/sdk`, used by the summarizer. The reason
+for the rule does not apply there: nothing in that route runs until everyone
+has hung up, and it is the only route that imports it.

@@ -40,6 +40,16 @@ export type LoggedCall = {
   tenantName: string | null;
   matchCount: number;
   startedAt: string;
+  transcript: string | null;
+  summary: string | null;
+};
+
+/** What transcription found, written back onto the call it belongs to. */
+export type Transcription = {
+  transcriptSid: string;
+  transcript: string;
+  summary: string | null;
+  summaryModel: string | null;
 };
 
 export class CallLogError extends Error {
@@ -108,6 +118,44 @@ export async function logCall(
   }
 }
 
+/**
+ * Writes the transcript and summary onto the call that produced them, found by
+ * the recording Twilio was asked to transcribe. Returns false when no row
+ * matched — which means the recording webhook never filed the call, and the
+ * transcript has nowhere to live.
+ */
+export async function attachTranscript(
+  config: SupabaseConfig,
+  recordingSid: string,
+  found: Transcription
+): Promise<{ ok: boolean; error?: string }> {
+  const url = new URL("/rest/v1/oncall_calls", config.url);
+  url.searchParams.set("recording_sid", `eq.${recordingSid}`);
+
+  try {
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: { ...headers(config), prefer: "return=representation" },
+      body: JSON.stringify({
+        transcript_sid: found.transcriptSid,
+        transcript: found.transcript,
+        summary: found.summary,
+        summary_model: found.summaryModel,
+        transcribed_at: new Date().toISOString(),
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!response.ok) return { ok: false, error: `Supabase returned HTTP ${response.status}.` };
+
+    const rows = (await response.json()) as unknown[];
+    return rows.length
+      ? { ok: true }
+      : { ok: false, error: `no logged call for recording ${recordingSid}` };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+}
+
 type Row = {
   id?: string | number;
   call_sid?: string;
@@ -120,16 +168,33 @@ type Row = {
   tenant_name?: string | null;
   match_count?: number | null;
   started_at?: string;
+  transcript?: string | null;
+  summary?: string | null;
 };
+
+/**
+ * The call a recording belongs to, for the transcript webhook — which knows
+ * the recording and needs the unit, so the summary can name the address rather
+ * than talk about "the caller".
+ */
+export async function getCallByRecording(
+  config: SupabaseConfig,
+  recordingSid: string
+): Promise<LoggedCall | null> {
+  const calls = await listCalls(config, 1, { recordingSid });
+  return calls[0] ?? null;
+}
 
 export async function listCalls(
   config: SupabaseConfig,
-  limit: number = DEFAULT_LIMIT
+  limit: number = DEFAULT_LIMIT,
+  filter: { recordingSid?: string } = {}
 ): Promise<LoggedCall[]> {
   const url = new URL("/rest/v1/oncall_calls", config.url);
+  if (filter.recordingSid) url.searchParams.set("recording_sid", `eq.${filter.recordingSid}`);
   url.searchParams.set(
     "select",
-    "id,call_sid,recording_sid,recording_seconds,kind,caller_phone,property_name,unit,tenant_name,match_count,started_at"
+    "id,call_sid,recording_sid,recording_seconds,kind,caller_phone,property_name,unit,tenant_name,match_count,started_at,transcript,summary"
   );
   url.searchParams.set("order", "started_at.desc");
   url.searchParams.set("limit", String(Math.min(Math.max(limit, 1), 200)));
@@ -166,5 +231,7 @@ export async function listCalls(
     tenantName: row.tenant_name ?? null,
     matchCount: row.match_count ?? 0,
     startedAt: row.started_at ?? new Date(0).toISOString(),
+    transcript: row.transcript ?? null,
+    summary: row.summary ?? null,
   }));
 }

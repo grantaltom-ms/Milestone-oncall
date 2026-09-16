@@ -24,6 +24,8 @@ type Call = {
   tenantName: string | null;
   matchCount: number;
   startedAt: string;
+  transcript: string | null;
+  summary: string | null;
 };
 
 function when(iso: string): string {
@@ -74,16 +76,18 @@ function where(call: Call): string {
 function noteFor(call: Call, origin: string): string {
   const link = call.recordingSid ? `${origin}/api/calls/${call.recordingSid}/audio` : "no recording";
   const length = duration(call.recordingSeconds);
-  return [
+  const header = [
     `After-hours ${call.kind === "voicemail" ? "voicemail" : "call"} — ${when(call.startedAt)}`,
     where(call),
     `From ${phone(call.callerPhone)}${length ? ` · ${length}` : ""}`,
     `Recording: ${link}`,
-    "",
-    "Reported:",
-    "Action taken:",
-    "Follow-up:",
-  ].join("\n");
+  ];
+
+  // With a summary the note is nearly written, and what is left is the part a
+  // person has to decide. Without one it is the blank form it always was.
+  return call.summary
+    ? [...header, "", call.summary.trim(), "", "Action taken:"].join("\n")
+    : [...header, "", "Reported:", "Action taken:", "Follow-up:"].join("\n");
 }
 
 type LoadResult = {
@@ -195,7 +199,8 @@ export default function CallsPage() {
       <h1>After-hours call log</h1>
       <p className="lede">
         Recorded calls and voicemails, newest first, with the unit already matched from the tenant
-        directory. Listen, then copy the note into the AppFolio work order.
+        directory and the call summarized. Read it, listen if you need to, then copy the note into
+        the AppFolio work order.
       </p>
 
       {error && <div className="card"><p className="warn">{error}</p></div>}
@@ -224,16 +229,20 @@ export default function CallsPage() {
                     {call.recordingSeconds ? ` · ${duration(call.recordingSeconds)}` : ""}
                     {call.kind === "voicemail" ? " · voicemail" : ""}
                   </span>
+                  {call.summary && <p className="summary">{call.summary}</p>}
                   {call.recordingSid && (
-                    <>
-                      <br />
-                      <audio
-                        controls
-                        preload="none"
-                        src={`/api/calls/${call.recordingSid}/audio`}
-                        style={{ marginTop: "0.5rem", width: "100%" }}
-                      />
-                    </>
+                    <audio
+                      controls
+                      preload="none"
+                      src={`/api/calls/${call.recordingSid}/audio`}
+                      style={{ marginTop: "0.5rem", width: "100%" }}
+                    />
+                  )}
+                  {call.transcript && (
+                    <details className="transcript">
+                      <summary>Transcript</summary>
+                      <pre>{call.transcript}</pre>
+                    </details>
                   )}
                 </td>
                 <td className="right">
@@ -249,7 +258,9 @@ export default function CallsPage() {
 
       <p className="lede">
         Recordings live in Twilio and play through this page, which is why it asks for a password —
-        they are recordings of residents. Delete them on Twilio&apos;s own retention schedule.
+        these are recordings of residents, and the transcripts are the same thing in a form that is
+        far easier to forward. Delete recordings on Twilio&apos;s own retention schedule, and decide
+        separately how long the transcripts should live.
       </p>
     </main>
   );
