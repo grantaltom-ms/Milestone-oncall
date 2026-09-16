@@ -25,6 +25,21 @@ export const DEFAULT_SUMMARY_MODEL = "claude-opus-5";
 /** Twilio auth tokens are 32 hex characters; any other length is a paste error. */
 export const TWILIO_AUTH_TOKEN_LENGTH = 32;
 
+/**
+ * A Conversation Intelligence (classic) Service SID is "GA" plus 32 hex.
+ *
+ * Twilio ships two products under almost the same name, next to each other in
+ * the console. This app speaks to the classic one (intelligence.twilio.com/v2),
+ * whose Services live under "Conversation Intelligence (classic)". The newer
+ * Conversation Intelligence hands out an Intelligence Configuration ID instead,
+ * which looks nothing like a SID and is silently useless here — so the shape is
+ * worth checking before a call is spent finding out.
+ */
+export const INTELLIGENCE_SERVICE_SID_PATTERN = /^GA[0-9a-fA-F]{32}$/;
+
+/** The ID prefix the newer Conversation Intelligence hands out, mistaken for the above. */
+export const INTELLIGENCE_CONFIGURATION_PREFIX = "intelligence_configuration_";
+
 export type GoogleConfig = {
   serviceAccountEmail: string;
   privateKey: string;

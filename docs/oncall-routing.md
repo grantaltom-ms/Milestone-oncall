@@ -63,7 +63,7 @@ Set these for **Production** and **Preview**. Full list with defaults in
 | `ONCALL_API_KEY` | Any long random string. Required before the status page will show full phone numbers. |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Optional. Turns on the unit lookup and the call log. The service-role key is server-only — never prefix it with `NEXT_PUBLIC_`. |
 | `ONCALL_RECORD_CALLS` | Optional, off by default. Records the rotation's calls only, never business-hours office calls. Recording in Washington means announcing it — see below before turning it on. |
-| `TWILIO_INTELLIGENCE_SERVICE_SID` | Optional. Transcribes each recording through Twilio Conversational Intelligence. |
+| `TWILIO_INTELLIGENCE_SERVICE_SID` | Optional. Transcribes each recording through Conversation Intelligence **(classic)**. A Service SID: `GA` plus 32 hex, not the newer product's `intelligence_configuration_…` ID. |
 | `ANTHROPIC_API_KEY` | Optional. Claude writes the summary of each transcript. Without it the transcript is still stored. |
 
 ### 4. Point the number at the app
@@ -202,18 +202,61 @@ Only recorded calls are transcribed, so this does nothing until
 
 ### Setting it up
 
-1. **Twilio Console → Conversational Intelligence → Services → Create.** Give
-   it a name, set the language to English, and leave auto-transcribe off — this
-   app asks for each transcript explicitly, so it transcribes exactly the calls
-   it recorded and nothing else.
+> **Twilio sells two products under almost the same name.** "Conversation
+> Intelligence" (newer) deals in *Intelligence configurations* with IDs like
+> `intelligence_configuration_01m2…`. "Conversation Intelligence **(classic)**"
+> deals in *Services* with SIDs like `GA…`. This app speaks to the classic API
+> at `intelligence.twilio.com/v2`, so it needs the second one. The newer
+> product's ID is silently useless here — it is accepted by the form, then
+> every transcription request fails.
+
+1. **Twilio Console → All products → Conversation Intelligence (classic) →
+   Services → Create new Service.** The classic section is usually not in the
+   main sidebar; reach it through *All products* or the console search box, and
+   check the heading says *(classic)* before creating anything. Give the Service
+   a name, set the language to English, and leave auto-transcribe off — this app
+   asks for each transcript explicitly, so it transcribes exactly the calls it
+   recorded and nothing else.
 2. Set that Service's **webhook URL** to
    `https://<your-app>.vercel.app/api/twilio/transcript`, method **POST**.
-3. Paste the Service SID (`GA…`) into `TWILIO_INTELLIGENCE_SERVICE_SID` on
-   Vercel.
+3. Paste the Service SID (`GA` plus 32 hex characters) into
+   `TWILIO_INTELLIGENCE_SERVICE_SID` on Vercel.
 4. Run [`docs/oncall-transcripts.sql`](oncall-transcripts.sql) in the Supabase
    SQL editor.
 5. Optional: set `ANTHROPIC_API_KEY` for the summaries. Without it you get the
    transcript and no summary, which is still a large step up from audio.
+
+If the classic section is hard to find in the console, the same Service can be
+created over the API, webhook and all:
+
+```bash
+curl -X POST "https://intelligence.twilio.com/v2/Services" \
+  --data-urlencode "UniqueName=milestone-oncall" \
+  --data-urlencode "LanguageCode=en-US" \
+  --data-urlencode "WebhookUrl=https://<your-app>.vercel.app/api/twilio/transcript" \
+  --data-urlencode "WebhookHttpMethod=POST" \
+  -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN"
+```
+
+The `sid` in the response is the value to paste. Twilio may require the
+Predictive and Generative AI/ML Features Addendum to be accepted in the console
+once before the API will create a Service; if the call is refused on those
+grounds, accept it there and run the command again.
+
+**On Vercel, a new environment variable only reaches the next build.** Adding
+the SID does nothing to the deployment already serving traffic — redeploy, then
+open `/api/oncall/status` and read the `transcription` field:
+
+| `transcription` | Means |
+| --- | --- |
+| `summarized` | The whole chain is live: recorded, transcribed, summarized. |
+| `transcript_only` | Working, but `ANTHROPIC_API_KEY` is unset, so no note is written. |
+| `no_recordings` | A Service is set but `ONCALL_RECORD_CALLS` is off, so it never receives audio. |
+| `misconfigured` | The SID is not `GA` plus 32 hex — usually the newer product's ID. The `warnings` list says which. |
+| `off` | No `TWILIO_INTELLIGENCE_SERVICE_SID` at all. |
+
+If the field is missing from the response entirely, the deployment predates
+this check and has not picked up the new variables either.
 
 ### What it costs
 
@@ -343,7 +386,8 @@ same number.
 | A text names the wrong unit | Two leases carry that number in AppFolio | It says "2 units share this number" instead of guessing; fix the record in AppFolio |
 | `/calls` is empty | Recording is off, and nobody has left a voicemail | The page says so at the top; set `ONCALL_RECORD_CALLS=true` to record answered calls |
 | A recording will not play | The dashboard session expired, or Twilio deleted it under its retention policy | Sign in again; check Twilio → Monitor → Recordings |
-| Recordings appear but never get a transcript | `TWILIO_INTELLIGENCE_SERVICE_SID` unset, or the Service's webhook does not point here | Vercel logs show `"stage":"transcribe_requested"` with the reason |
+| Recordings appear but never get a transcript | `TWILIO_INTELLIGENCE_SERVICE_SID` unset, holding the newer product's `intelligence_configuration_…` ID, or the Service's webhook does not point here | `/api/oncall/status` reports `transcription` and the reason in `warnings`; Vercel logs show `"stage":"transcribe_requested"` |
+| Everything looks right but nothing changed | Environment variables were added after the running deployment was built | `/api/oncall/status` still reports the old `transcription` value, or omits the field; redeploy |
 | Transcripts appear but never a summary | `ANTHROPIC_API_KEY` unset, or the call failed | Vercel logs show `"stage":"transcript","summarized":false` and the error |
 | A transcript never arrives | The Service webhook is wrong, or the transcript failed inside Twilio | Twilio Console → Conversational Intelligence → Transcripts shows each one's status |
 
