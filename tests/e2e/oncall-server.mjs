@@ -33,6 +33,11 @@ let nextEventId = 1;
 let directory = [];
 /** Rows the Twilio webhooks have filed in the call log. */
 let callLog = [];
+/** Transcripts Conversational Intelligence has been asked for. */
+let transcriptRequests = [];
+/** What the stand-in Intelligence API says about a transcript when asked. */
+let transcriptStatus = "completed";
+let transcriptSentences = [];
 
 /**
  * Google filters events server-side by the time window. The stand-in does the
@@ -110,10 +115,77 @@ const mock = createServer(async (req, res) => {
       res.writeHead(201);
       return res.end();
     }
-    const newestFirst = [...callLog].sort((a, b) =>
+
+    // PostgREST filter syntax: ?recording_sid=eq.RE...
+    const wanted = (url.searchParams.get("recording_sid") ?? "").replace(/^eq\./, "");
+    const matching = wanted ? callLog.filter((row) => row.recording_sid === wanted) : callLog;
+
+    if (req.method === "PATCH") {
+      const patch = JSON.parse((await readBody(req)) || "{}");
+      matching.forEach((row) => Object.assign(row, patch));
+      return json(res, matching);
+    }
+
+    const newestFirst = [...matching].sort((a, b) =>
       String(b.started_at ?? "").localeCompare(String(a.started_at ?? ""))
     );
     return json(res, newestFirst);
+  }
+
+  // Conversational Intelligence: ask for a transcript, then read it back.
+  if (url.pathname === "/v2/Transcripts" && req.method === "POST") {
+    const form = new URLSearchParams(await readBody(req));
+    const request = {
+      serviceSid: form.get("ServiceSid"),
+      channel: JSON.parse(form.get("Channel") ?? "{}"),
+      customerKey: form.get("CustomerKey"),
+    };
+    transcriptRequests.push(request);
+    return json(res, { sid: `GT${"0".repeat(32)}`, status: "queued" });
+  }
+
+  if (url.pathname.endsWith("/Sentences")) {
+    return json(res, { sentences: transcriptSentences });
+  }
+
+  if (url.pathname.startsWith("/v2/Transcripts/")) {
+    const latest = transcriptRequests[transcriptRequests.length - 1];
+    return json(res, {
+      sid: url.pathname.split("/").pop(),
+      status: transcriptStatus,
+      customer_key: latest?.customerKey ?? null,
+      duration: 252,
+    });
+  }
+
+  // Claude, writing the summary.
+  if (url.pathname === "/v1/messages") {
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const prompt = String(body.messages?.[0]?.content ?? "");
+    return json(res, {
+      id: "msg_e2e",
+      type: "message",
+      role: "assistant",
+      model: body.model ?? "claude-opus-5",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_e2e",
+          name: "file_call_summary",
+          input: {
+            summary: prompt.includes("Willow Lake")
+              ? "Resident at Willow Lake reported water coming through the bedroom ceiling."
+              : "Resident reported water coming through the bedroom ceiling.",
+            urgency: "emergency",
+            promised: "onsite within the hour",
+            followUp: "check the unit above for the source",
+          },
+        },
+      ],
+      stop_reason: "tool_use",
+      stop_sequence: null,
+      usage: { input_tokens: 420, output_tokens: 110 },
+    });
   }
 
   // Twilio's recording media, which /api/calls/[sid]/audio proxies rather than
@@ -140,10 +212,23 @@ const mock = createServer(async (req, res) => {
       if (next.techs !== undefined) techs = next.techs;
       if (next.directory !== undefined) directory = next.directory;
       if (next.callLog !== undefined) callLog = next.callLog;
-      if (next.reset) sentSms = [];
+      if (next.transcriptSentences !== undefined) transcriptSentences = next.transcriptSentences;
+      if (next.transcriptStatus !== undefined) transcriptStatus = next.transcriptStatus;
+      if (next.reset) {
+        sentSms = [];
+        transcriptRequests = [];
+      }
       return json(res, { ok: true });
     }
-    return json(res, { items: calendarItems, calendarStatus, sms: sentSms, techs, directory, callLog });
+    return json(res, {
+      items: calendarItems,
+      calendarStatus,
+      sms: sentSms,
+      techs,
+      directory,
+      callLog,
+      transcriptRequests,
+    });
   }
 
   json(res, { error: `unexpected ${req.method} ${url.pathname}` }, 404);
@@ -167,6 +252,11 @@ mock.listen(config.mockPort, "127.0.0.1", () => {
       // On, so the end-to-end tests cover the whole recorded-call chain: the
       // consent announcement, the recording callback, the log, and playback.
       ONCALL_RECORD_CALLS: "true",
+      // Conversational Intelligence and Claude, both pointed at the stand-in.
+      TWILIO_INTELLIGENCE_SERVICE_SID: `GA${"1".repeat(32)}`,
+      TWILIO_INTELLIGENCE_BASE: `${base}/v2`,
+      ANTHROPIC_API_KEY: "sk-ant-e2e",
+      ANTHROPIC_BASE_URL: base,
       GOOGLE_SERVICE_ACCOUNT_EMAIL: "oncall@milestone.iam.gserviceaccount.com",
       GOOGLE_PRIVATE_KEY: privateKey.replace(/\n/g, "\\n"),
       GOOGLE_CALENDAR_ID: "maintenance@milestoneprop.com",

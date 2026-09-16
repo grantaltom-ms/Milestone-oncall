@@ -25,6 +25,12 @@ const TENANT_ROW = {
   match_rank: 0,
 };
 
+const SENTENCES = [
+  { sentence_index: 0, media_channel: 1, transcript: "There's water coming through the bedroom ceiling." },
+  { sentence_index: 1, media_channel: 2, transcript: "Can you shut the valve under the kitchen sink?" },
+  { sentence_index: 2, media_channel: 1, transcript: "Doing it now." },
+];
+
 async function setUp(request: APIRequestContext, state: Record<string, unknown> = {}) {
   await request.post(MOCK, {
     data: {
@@ -33,8 +39,17 @@ async function setUp(request: APIRequestContext, state: Record<string, unknown> 
       items: [{ summary: config.techA.name, location: config.techA.phone }],
       directory: [TENANT_ROW],
       callLog: [],
+      transcriptSentences: SENTENCES,
+      transcriptStatus: "completed",
       ...state,
     },
+  });
+}
+
+/** The callback Conversational Intelligence fires when the words are ready. */
+async function transcriptReady(request: APIRequestContext, transcriptSid: string) {
+  return request.post(`${APP}/api/twilio/transcript`, {
+    form: { transcript_sid: transcriptSid, event_type: "voice_intelligence_transcript_available" },
   });
 }
 
@@ -210,5 +225,88 @@ test.describe("the morning after", () => {
     expect(callLog[0]).toMatchObject({ kind: "voicemail", unit: "V - 12" });
     // And the text that wakes the manager says where it came from.
     expect(sms[0].body).toContain("Willow Lake Apartments #V - 12");
+  });
+});
+
+test.describe("transcripts and summaries", () => {
+  const TRANSCRIPT_SID = `GT${"0".repeat(32)}`;
+
+  test("a finished recording is sent for transcription, keyed to itself", async ({ request }) => {
+    await setUp(request);
+    await twilioPost(request, "/api/twilio/voice");
+    await finishRecording(request);
+
+    const { transcriptRequests } = await mockState(request);
+    expect(transcriptRequests).toHaveLength(1);
+    expect(transcriptRequests[0].channel).toEqual({
+      media_properties: { source_sid: RECORDING_SID },
+    });
+    // The recording travels with the job, so the finished transcript can find
+    // its way back to the right call with nothing kept in between.
+    expect(transcriptRequests[0].customerKey).toBe(RECORDING_SID);
+  });
+
+  test("the words and the summary land on the call, and in the note", async ({
+    page,
+    request,
+    context,
+  }) => {
+    await setUp(request);
+    await twilioPost(request, "/api/twilio/voice");
+    await finishRecording(request);
+
+    const done = await transcriptReady(request, TRANSCRIPT_SID);
+    expect(done.status()).toBe(204);
+
+    const { callLog } = await mockState(request);
+    expect(callLog[0].transcript).toBe(
+      [
+        "Resident: There's water coming through the bedroom ceiling.",
+        "Milestone: Can you shut the valve under the kitchen sink?",
+        "Resident: Doing it now.",
+      ].join("\n")
+    );
+    expect(callLog[0].summary).toContain("water coming through the bedroom ceiling");
+    expect(callLog[0].summary).toContain("Urgency: emergency");
+    // The summarizer was told which unit called, and said so.
+    expect(callLog[0].summary).toContain("Willow Lake");
+
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: APP });
+    await signIn(page);
+
+    // The summary reads on the card; the transcript is folded away behind it.
+    await expect(page.locator("p.summary")).toContainText("water coming through the bedroom ceiling");
+    await expect(page.locator("details.transcript pre")).not.toBeVisible();
+
+    await page.getByRole("group").getByText("Transcript").click();
+    await expect(page.locator("details.transcript pre")).toContainText(
+      "Milestone: Can you shut the valve"
+    );
+
+    await page.getByRole("button", { name: "Copy note" }).click();
+    const note = await page.evaluate(() => navigator.clipboard.readText());
+    expect(note).toContain("Willow Lake Apartments #V - 12");
+    expect(note).toContain("Urgency: emergency");
+    expect(note).toContain("Promised: onsite within the hour");
+    // The one line a person still has to think about is still theirs.
+    expect(note).toContain("Action taken:");
+    expect(note).not.toContain("Reported:");
+  });
+
+  test("a transcript still being written is left alone until it is finished", async ({ request }) => {
+    await setUp(request, { transcriptStatus: "in-progress" });
+    await twilioPost(request, "/api/twilio/voice");
+    await finishRecording(request);
+
+    await transcriptReady(request, TRANSCRIPT_SID);
+
+    const { callLog } = await mockState(request);
+    expect(callLog[0].transcript).toBeUndefined();
+  });
+
+  test("refuses a callback naming something that is not a transcript", async ({ request }) => {
+    await setUp(request);
+    const response = await transcriptReady(request, "../../Services/GA1");
+    expect(response.status()).toBe(400);
   });
 });

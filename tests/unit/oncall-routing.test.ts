@@ -26,6 +26,8 @@ function config(overrides: Partial<OnCallConfig> = {}): OnCallConfig {
     techAttempts: 2,
     recordCalls: false,
     callerLookup: true,
+    intelligenceServiceSid: null,
+    anthropic: null,
     companyName: "Milestone Properties",
     google: {
       serviceAccountEmail: "oncall@milestone.iam.gserviceaccount.com",

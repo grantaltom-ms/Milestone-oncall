@@ -63,6 +63,8 @@ Set these for **Production** and **Preview**. Full list with defaults in
 | `ONCALL_API_KEY` | Any long random string. Required before the status page will show full phone numbers. |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Optional. Turns on the unit lookup and the call log. The service-role key is server-only — never prefix it with `NEXT_PUBLIC_`. |
 | `ONCALL_RECORD_CALLS` | Optional, off by default. Records the rotation's calls only, never business-hours office calls. Recording in Washington means announcing it — see below before turning it on. |
+| `TWILIO_INTELLIGENCE_SERVICE_SID` | Optional. Transcribes each recording through Twilio Conversational Intelligence. |
+| `ANTHROPIC_API_KEY` | Optional. Claude writes the summary of each transcript. Without it the transcript is still stored. |
 
 ### 4. Point the number at the app
 
@@ -193,6 +195,73 @@ password. Set a retention period in the Twilio Console (Voice → Settings) so
 recordings of residents are not kept forever by default, and remember that
 storage is billed per recording per month.
 
+## Transcripts and summaries
+
+Only recorded calls are transcribed, so this does nothing until
+`ONCALL_RECORD_CALLS` is on.
+
+### Setting it up
+
+1. **Twilio Console → Conversational Intelligence → Services → Create.** Give
+   it a name, set the language to English, and leave auto-transcribe off — this
+   app asks for each transcript explicitly, so it transcribes exactly the calls
+   it recorded and nothing else.
+2. Set that Service's **webhook URL** to
+   `https://<your-app>.vercel.app/api/twilio/transcript`, method **POST**.
+3. Paste the Service SID (`GA…`) into `TWILIO_INTELLIGENCE_SERVICE_SID` on
+   Vercel.
+4. Run [`docs/oncall-transcripts.sql`](oncall-transcripts.sql) in the Supabase
+   SQL editor.
+5. Optional: set `ANTHROPIC_API_KEY` for the summaries. Without it you get the
+   transcript and no summary, which is still a large step up from audio.
+
+### What it costs
+
+At Twilio's published rates, per 5-minute call: recording $0.0125, storage
+$0.0025/month, transcription $0.12, summary about $0.013. Twenty after-hours
+calls a month is roughly **$3**. The storage line is the only one that grows —
+it accrues for as long as you keep the audio, which is the argument for setting
+a retention period rather than the transcription bill.
+
+Transcription was put on Twilio rather than a dedicated vendor (Deepgram and
+AssemblyAI are five to ten times cheaper per minute) for one reason: the audio
+never leaves a company that already has it. At two dollars a month the saving
+does not pay for a second vendor holding recordings of residents. If call
+volume ever grew fiftyfold, that trade is worth revisiting.
+
+### How it hangs together
+
+```
+recording finishes
+  └─ /api/twilio/recording files the call, then asks for a transcript
+       (CustomerKey = the recording SID, so the job carries its own return address)
+           ↓ minutes later
+     Conversational Intelligence posts to /api/twilio/transcript
+  └─ that route reads the status, the recording and the words back from Twilio,
+     has Claude summarize them, and writes both onto the call
+           ↓
+     /calls shows the summary, folds the transcript away beneath it, and the
+     Copy note button produces a note that is already most of the way written
+```
+
+The webhook **believes nothing it is sent.** Twilio does not document a
+signature on this callback, so the transcript ID is checked for shape and every
+fact after that is read back over an authenticated request. A forged post costs
+one wasted API call and can change nothing.
+
+### Two things worth deciding
+
+- **Keep transcripts for how long?** A transcript is the same conversation in a
+  form that is searchable, copy-pasteable and easy to forward. It sits behind
+  the same password as the audio, but it does not have to have the same
+  lifespan, and the argument for keeping it longer (an archive you can search)
+  cuts against the argument for keeping it shorter (it is a record of a
+  resident's bad night).
+- **Read the first few.** The summary is written from what was said, and it is
+  told not to invent a cause or a fix nobody mentioned — but it is worth
+  reading the first handful against their recordings before anyone starts
+  pasting them into work orders unread.
+
 ## Running the rotation week to week
 
 The easy way is the dashboard at `/schedule`. Pick a technician, a first day
@@ -274,6 +343,9 @@ same number.
 | A text names the wrong unit | Two leases carry that number in AppFolio | It says "2 units share this number" instead of guessing; fix the record in AppFolio |
 | `/calls` is empty | Recording is off, and nobody has left a voicemail | The page says so at the top; set `ONCALL_RECORD_CALLS=true` to record answered calls |
 | A recording will not play | The dashboard session expired, or Twilio deleted it under its retention policy | Sign in again; check Twilio → Monitor → Recordings |
+| Recordings appear but never get a transcript | `TWILIO_INTELLIGENCE_SERVICE_SID` unset, or the Service's webhook does not point here | Vercel logs show `"stage":"transcribe_requested"` with the reason |
+| Transcripts appear but never a summary | `ANTHROPIC_API_KEY` unset, or the call failed | Vercel logs show `"stage":"transcript","summarized":false` and the error |
+| A transcript never arrives | The Service webhook is wrong, or the transcript failed inside Twilio | Twilio Console → Conversational Intelligence → Transcripts shows each one's status |
 
 Every call writes one line to the Vercel logs (`event: "oncall"`) with who was
 chosen and why — filter on `oncall` in Vercel → Logs to see last night's calls.
@@ -287,6 +359,9 @@ chosen and why — filter on `oncall` in Vercel → Logs to see last night's cal
 | `src/app/api/twilio/recording/route.ts` | Files a recorded call under the unit that made it |
 | `src/lib/oncall/tenants.ts` | Matches a caller ID to a unit in the tenant directory |
 | `src/lib/oncall/message.ts` | Writes the text the technician reads, inside one SMS segment |
+| `src/app/api/twilio/transcript/route.ts` | Stores the words and the summary when Twilio says they are ready |
+| `src/lib/oncall/intelligence.ts` | Twilio Conversational Intelligence: a recording in, words out |
+| `src/lib/oncall/summary.ts` | The transcript, as the note that goes in a work order |
 | `src/app/calls/page.tsx` | Listening back, and the note that goes into AppFolio |
 | `src/app/api/oncall/status/route.ts` | "Who is on call right now?" as JSON |
 | `src/lib/oncall/calendar.ts` | Reads the shift from Google Calendar (service-account JWT, no SDK) |
