@@ -109,9 +109,13 @@ Two things make matches miss, and both are fixed in AppFolio rather than here:
   `000-000-0000` and one real mobile listed on six different units. Cleaning
   those up in AppFolio is what makes the match land; nothing here has to change.
 
-The match is only ever read live — the directory is never copied — so a number
-corrected in AppFolio this afternoon is matched correctly tonight, as soon as
-the nightly tenant directory sync carries it over.
+The match is read live on every call — nothing is copied into this app — so a
+correction is in effect the moment `tenant_directory` carries it. That table is
+what lags: it refreshes **weekly, on Mondays**. A resident who moves in on
+Tuesday is therefore an unmatched number until the following Monday, and a
+move-out keeps matching for the same stretch. If that gap matters, the fix is to
+run the tenant directory sync more often — nothing in the phone line has to
+change for it.
 
 ## Recording calls
 
