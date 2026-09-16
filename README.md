@@ -81,6 +81,11 @@ for maintenance records" before anything is dialed, once per call — and your
 technicians need telling in writing when they join the rotation. Recording
 starts when someone answers, so an unanswered ring leaves nothing behind.
 
+Only the rotation's calls are recorded. The same line during business hours
+reaches the office and is left alone: the person at that desk never joined an
+on-call rotation, and a resident calling at 2pm is not reporting an after-hours
+emergency.
+
 Recorded calls and voicemails land on **`/calls`**, newest first, each already
 filed under the unit that called. Listen back in the browser, then **Copy note**
 for the block that goes into the AppFolio work order:

@@ -107,6 +107,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -347,6 +348,62 @@ describe("POST /api/twilio/voice — recording", () => {
     vi.stubEnv("ONCALL_RECORD_CALLS", "true");
     const xml = await xmlOf(await call("/api/twilio/voice?stage=backup", { DialCallStatus: "no-answer" }));
     expect(xml).toContain(`<Number>${BACKUP}</Number>`);
+    expect(xml).toContain('record="record-from-answer-dual"');
+  });
+});
+
+describe("POST /api/twilio/voice — recording follows the rotation, not the switch", () => {
+  /** Only `Date` is faked; the timers the fetch timeouts rely on stay real. */
+  const at = (iso: string) => vi.useFakeTimers({ now: new Date(iso), toFake: ["Date"] });
+
+  beforeEach(() => {
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    // Let the clock decide who answers, which is what this is about.
+    vi.stubEnv("ONCALL_ALWAYS", "false");
+  });
+
+  it("leaves a business-hours office call alone", async () => {
+    // Tuesday 1:00 PM in Seattle: the office picks up, and whoever is at that
+    // desk never joined an on-call rotation.
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${OFFICE}</Number>`);
+    expect(xml).not.toContain("record=");
+    expect(xml).not.toContain("will be recorded");
+  });
+
+  it("records the same line once the rotation has it", async () => {
+    // Tuesday 9:00 PM in Seattle — same phone number, same switch, after hours.
+    at("2026-09-16T04:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
+    expect(xml).toContain('record="record-from-answer-dual"');
+    expect(xml).toContain("This call will be recorded");
+  });
+
+  it("does not record the backup manager on a daytime call either", async () => {
+    // An unanswered office call escalates to the backup manager. Still daytime,
+    // so still not the rotation's call to record.
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice?stage=backup", { DialCallStatus: "no-answer" }));
+
+    expect(xml).toContain(`<Number>${BACKUP}</Number>`);
+    expect(xml).not.toContain("record=");
+  });
+
+  it("still records everything when the rotation is on around the clock", async () => {
+    // ONCALL_ALWAYS means there are no business hours to carve out.
+    vi.stubEnv("ONCALL_ALWAYS", "true");
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
     expect(xml).toContain('record="record-from-answer-dual"');
   });
 });

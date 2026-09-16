@@ -62,7 +62,7 @@ Set these for **Production** and **Preview**. Full list with defaults in
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` / `GOOGLE_CALENDAR_ID` | From the JSON key file and the calendar's settings page. Paste the private key exactly as it appears, `\n` sequences and all. |
 | `ONCALL_API_KEY` | Any long random string. Required before the status page will show full phone numbers. |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Optional. Turns on the unit lookup and the call log. The service-role key is server-only — never prefix it with `NEXT_PUBLIC_`. |
-| `ONCALL_RECORD_CALLS` | Optional, off by default. Recording calls in Washington means announcing it — see below before turning it on. |
+| `ONCALL_RECORD_CALLS` | Optional, off by default. Records the rotation's calls only, never business-hours office calls. Recording in Washington means announcing it — see below before turning it on. |
 
 ### 4. Point the number at the app
 
@@ -128,6 +128,10 @@ recorded call has to be told. With `ONCALL_RECORD_CALLS=true`:
   before anything is dialed — once per call, not once per unanswered ring.
 - Recording starts when somebody answers, so an unanswered ring leaves nothing
   behind, and both sides are captured on separate channels.
+- **Only the rotation's calls.** Weekday daytime calls reach the office and are
+  not recorded or announced — the person at that desk never joined an on-call
+  rotation. The switch covers the after-hours window only, the same window the
+  rotation itself answers. (`ONCALL_ALWAYS=true` removes the distinction.)
 - **Technicians are your side of the consent.** Tell each one in writing when
   they join the rotation that after-hours calls they answer are recorded; a
   line in the on-call policy they sign is the usual way to do it. The system

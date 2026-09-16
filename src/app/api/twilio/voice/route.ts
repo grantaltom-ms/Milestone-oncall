@@ -4,6 +4,7 @@ import { incomingCallMessage } from "@/lib/oncall/message";
 import { toE164 } from "@/lib/oncall/phone";
 import { resolveDestination } from "@/lib/oncall/routing";
 import { lookupCaller, type CallerLookup } from "@/lib/oncall/tenants";
+import { isOnCallWindow } from "@/lib/oncall/window";
 import {
   candidateUrls,
   isValidTwilioRequest,
@@ -48,6 +49,17 @@ const RECORD_MODE = "record-from-answer-dual";
  */
 const RECORDING_NOTICE = "This call will be recorded for maintenance records.";
 
+/**
+ * Recording follows the rotation, not the switch alone. A call that reaches the
+ * office during business hours is an ordinary office call — the people
+ * answering it did not join an on-call rotation, and residents calling in
+ * daylight are not reporting an after-hours emergency. Only the rotation's own
+ * calls are recorded.
+ */
+function shouldRecord(config: OnCallConfig, now: Date): boolean {
+  return config.recordCalls && isOnCallWindow(now, config);
+}
+
 function log(entry: Record<string, unknown>) {
   console.log(JSON.stringify({ event: "oncall", ...entry }));
 }
@@ -67,8 +79,8 @@ function withCaller(path: string, callerNumber: string | null): string {
 }
 
 /** The recording attributes for a `<Dial>`, or nothing at all when recording is off. */
-function recordingFor(config: OnCallConfig, callerNumber: string | null) {
-  if (!config.recordCalls) return {};
+function recordingFor(recording: boolean, callerNumber: string | null) {
+  if (!recording) return {};
   return { record: RECORD_MODE, recordingStatusCallback: withCaller("/api/twilio/recording", callerNumber) };
 }
 
@@ -126,6 +138,9 @@ async function textIncomingCaller(
 export async function POST(request: Request) {
   const config = getOnCallConfig();
   const params = await readTwilioParams(request);
+  // One clock reading for the whole request: the routing decision and the
+  // recording decision must not disagree across a 5:00 pm boundary.
+  const now = new Date();
   const url = new URL(request.url);
   const stage = (url.searchParams.get("stage") ?? "tech") as Stage;
   const attempt = Math.min(Math.max(Number.parseInt(url.searchParams.get("attempt") ?? "1", 10) || 1, 1), 3);
@@ -135,6 +150,7 @@ export async function POST(request: Request) {
   // Whatever the tenant dialed *is* the office line, so it is a safe caller ID
   // even before TWILIO_MAIN_LINE is set.
   const callerId = config.mainLine ?? toE164(params.To);
+  const recording = shouldRecord(config, now);
 
   if (config.twilio) {
     const urls = candidateUrls(request, config.publicBaseUrl);
@@ -198,14 +214,14 @@ export async function POST(request: Request) {
           callerId,
           timeoutSeconds: config.dialTimeoutSeconds,
           action: stageUrl("voicemail"),
-          ...recordingFor(config, callerNumber),
+          ...recordingFor(recording, callerNumber),
         })
       )
     );
   }
 
   // stage === "tech"
-  const decision = await resolveDestination(new Date(), config);
+  const decision = await resolveDestination(now, config);
   log({
     stage,
     attempt,
@@ -237,14 +253,12 @@ export async function POST(request: Request) {
     callerId,
     timeoutSeconds: config.dialTimeoutSeconds,
     action: nextAction,
-    ...recordingFor(config, callerNumber),
+    ...recordingFor(recording, callerNumber),
   });
 
   // The consent announcement belongs on the first leg only: it is one notice
   // per call, not one per unanswered ring.
   return twimlResponse(
-    config.recordCalls && attempt === 1
-      ? twiml(say(RECORDING_NOTICE), connect)
-      : twiml(connect)
+    recording && attempt === 1 ? twiml(say(RECORDING_NOTICE), connect) : twiml(connect)
   );
 }
