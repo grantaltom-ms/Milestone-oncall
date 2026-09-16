@@ -24,6 +24,8 @@ function config(overrides: Partial<OnCallConfig> = {}): OnCallConfig {
     alwaysOnCall: false,
     dialTimeoutSeconds: 25,
     techAttempts: 2,
+    recordCalls: false,
+    callerLookup: true,
     companyName: "Milestone Properties",
     google: {
       serviceAccountEmail: "oncall@milestone.iam.gserviceaccount.com",

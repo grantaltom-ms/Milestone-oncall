@@ -27,6 +27,17 @@ async function mockState(request: APIRequestContext): Promise<MockState> {
   return (await request.get(MOCK)).json();
 }
 
+/**
+ * The "who is calling" text is sent *after* the TwiML goes back to Twilio —
+ * that is the point of it: a slow text must never delay a ringing phone. So
+ * the stand-in hears about it a moment after the webhook has answered, and a
+ * test that reads the state the instant it returns is reading too early.
+ */
+async function textsSent(request: APIRequestContext, count: number) {
+  await expect.poll(async () => (await mockState(request)).sms.length).toBe(count);
+  return (await mockState(request)).sms;
+}
+
 /** One signed Twilio webhook, exactly as Twilio would send it. */
 async function twilioCall(
   request: APIRequestContext,
@@ -59,13 +70,16 @@ test.describe("after-hours maintenance line", () => {
     expect(response.headers()["content-type"]).toContain("text/xml");
     expect(xml).toContain(`<Number>${config.techA.phone}</Number>`);
     expect(xml).toContain(`callerId="${config.mainLine}"`);
-    expect(xml).not.toContain(config.tenant); // the handset only ever shows the office line
+    // The handset only ever shows the office line. (With recording on, the
+    // tenant's number is in the recording callback URL, percent-encoded and
+    // covered by Twilio's signature — that URL is Twilio's to call, not a
+    // number anybody's phone displays.)
+    expect(xml).not.toContain(config.tenant);
 
-    const { sms } = await mockState(request);
-    expect(sms).toHaveLength(1);
+    const sms = await textsSent(request, 1);
     expect(sms[0]).toMatchObject({ to: config.techA.phone, from: config.mainLine });
     // The number on its own labelled line — tappable, and unmistakable at 2am.
-    expect(sms[0].body).toContain("\nResident callback: (206) 555-9876\n");
+    expect(sms[0].body).toContain("\nCallback: (206) 555-9876\n");
 
     // Tech answers; when the call ends Twilio asks what is next and gets "nothing".
     const done = await twilioCall(request, nextStep(xml)!, { DialCallStatus: "completed" });
@@ -97,7 +111,7 @@ test.describe("after-hours maintenance line", () => {
     });
     expect(recorded.response.status()).toBe(204);
 
-    const { sms } = await mockState(request);
+    const sms = await textsSent(request, 3);
     expect(sms.map((message) => message.to)).toEqual([
       config.techA.phone, // ring one
       config.backupPhone, // escalation
@@ -120,7 +134,7 @@ test.describe("after-hours maintenance line", () => {
     expect(afterSwap.xml).not.toContain(config.techA.phone);
     expect(afterSwap.xml).toContain(`callerId="${config.mainLine}"`); // unchanged, call after call
 
-    const { sms } = await mockState(request);
+    const sms = await textsSent(request, 2);
     expect(sms.map((message) => message.to)).toEqual([config.techA.phone, config.techB.phone]);
   });
 

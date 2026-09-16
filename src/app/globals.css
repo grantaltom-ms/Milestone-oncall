@@ -159,6 +159,7 @@ h2 {
 }
 
 .actions {
+  align-items: center;
   display: flex;
   gap: 0.5rem;
 }

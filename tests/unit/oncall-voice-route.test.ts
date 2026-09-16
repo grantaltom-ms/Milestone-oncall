@@ -29,6 +29,8 @@ const DANA_PHONE = "+12065550175";
 let calendarItems: Record<string, unknown>[] | "down" = [MIKE];
 let sentSms: { to: string; from: string; body: string }[] = [];
 let tokenRequests = 0;
+let directoryRows: Record<string, unknown>[] | "down" = [];
+let directoryQueries: string[] = [];
 
 function stubNetwork() {
   vi.stubGlobal(
@@ -42,6 +44,11 @@ function stubNetwork() {
       if (url.includes("cal.test")) {
         if (calendarItems === "down") return new Response("boom", { status: 500 });
         return Response.json({ items: calendarItems });
+      }
+      if (url.includes("/rest/v1/oncall_caller_lookup")) {
+        directoryQueries.push(url);
+        if (directoryRows === "down") return new Response("boom", { status: 500 });
+        return Response.json(directoryRows);
       }
       if (url.includes("twilio.test")) {
         const form = new URLSearchParams(String(init?.body));
@@ -80,6 +87,8 @@ beforeEach(() => {
   calendarItems = [MIKE];
   sentSms = [];
   tokenRequests = 0;
+  directoryRows = [];
+  directoryQueries = [];
   resetGoogleTokenCache();
   stubNetwork();
   vi.stubEnv("TWILIO_ACCOUNT_SID", "AC-test");
@@ -98,6 +107,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -161,7 +171,11 @@ describe("POST /api/twilio/voice — escalation", () => {
     expect(xml).toContain("dial 9 1 1");
     expect(xml).toContain("<Record");
     expect(xml).toContain('action="/api/twilio/voice?stage=goodbye"');
-    expect(xml).toContain('recordingStatusCallback="/api/twilio/voicemail"');
+    // The caller rides along in the query string: Twilio's recording callback
+    // does not carry it, and the voicemail text is worth nothing without it.
+    expect(xml).toContain(
+      `recordingStatusCallback="/api/twilio/voicemail?from=${encodeURIComponent(TENANT)}"`
+    );
   });
 
   it("hangs up politely once the message is recorded", async () => {
@@ -241,5 +255,155 @@ describe("POST /api/twilio/voice — a realistic night", () => {
 
     expect(tokenRequests).toBe(1); // one Google login served the whole night
     expect(sentSms.map((sms) => sms.to)).toEqual([MIKE_PHONE, BACKUP, MIKE_PHONE, DANA_PHONE]);
+  });
+});
+
+describe("POST /api/twilio/voice — which unit is calling", () => {
+  const withDirectory = () => {
+    vi.stubEnv("SUPABASE_URL", "https://db.test");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role-key");
+  };
+
+  it("puts the unit in the technician's text, matched on the caller ID", async () => {
+    withDirectory();
+    directoryRows = [
+      { property_name: "Willow Lake Apartments", unit: "V - 12", tenant_name: "Kovacs, Nadia" },
+    ];
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(sentSms[0].body).toContain("Willow Lake #V-12, Nadia Kovacs");
+    expect(sentSms[0].body).toContain("(206) 555-9876");
+    // The directory is asked about the number that actually called.
+    expect(directoryQueries[0]).toContain("phone10=eq.2065559876");
+    // And none of it reaches the handset as caller ID.
+    expect(xml).not.toContain(TENANT);
+  });
+
+  it("says the number is unknown rather than leaving the technician guessing", async () => {
+    withDirectory();
+    directoryRows = [];
+    await call("/api/twilio/voice");
+    expect(sentSms[0].body).toContain("Number not in the tenant directory.");
+  });
+
+  it("connects the call and still texts when the directory is down", async () => {
+    // The whole point of looking the caller up after the TwiML is written: a
+    // slow or broken directory costs one line of a text, never a call.
+    withDirectory();
+    directoryRows = "down";
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
+    expect(sentSms[0].body).toContain("(206) 555-9876");
+    expect(sentSms[0].body).not.toContain("directory");
+  });
+
+  it("does not ask the directory about a blocked caller", async () => {
+    withDirectory();
+    await call("/api/twilio/voice", { From: "anonymous" });
+    expect(directoryQueries).toHaveLength(0);
+    expect(sentSms[0].body).toContain("came through blocked");
+  });
+
+  it("asks nothing at all when the directory is switched off", async () => {
+    withDirectory();
+    vi.stubEnv("ONCALL_CALLER_LOOKUP", "false");
+    await call("/api/twilio/voice");
+    expect(directoryQueries).toHaveLength(0);
+    expect(sentSms[0].body).toContain("(206) 555-9876");
+  });
+});
+
+describe("POST /api/twilio/voice — recording", () => {
+  it("records nothing and announces nothing unless it is turned on", async () => {
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+    expect(xml).not.toContain("record=");
+    expect(xml).not.toContain("will be recorded");
+  });
+
+  it("tells the caller before recording anything", async () => {
+    // Washington is an all-party consent state: the announcement is the consent.
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+    expect(xml).toContain("This call will be recorded");
+    expect(xml.indexOf("This call will be recorded")).toBeLessThan(xml.indexOf("<Dial"));
+    expect(xml).toContain('record="record-from-answer-dual"');
+    expect(xml).toContain(
+      `recordingStatusCallback="/api/twilio/recording?from=${encodeURIComponent(TENANT)}"`
+    );
+  });
+
+  it("announces once per call, not once per unanswered ring", async () => {
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const second = await xmlOf(
+      await call("/api/twilio/voice?stage=tech&attempt=2", { DialCallStatus: "no-answer" })
+    );
+    expect(second).not.toContain("This call will be recorded");
+    expect(second).toContain('record="record-from-answer-dual"'); // still recorded, just not re-announced
+  });
+
+  it("records the backup manager's leg too", async () => {
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const xml = await xmlOf(await call("/api/twilio/voice?stage=backup", { DialCallStatus: "no-answer" }));
+    expect(xml).toContain(`<Number>${BACKUP}</Number>`);
+    expect(xml).toContain('record="record-from-answer-dual"');
+  });
+});
+
+describe("POST /api/twilio/voice — recording follows the rotation, not the switch", () => {
+  /** Only `Date` is faked; the timers the fetch timeouts rely on stay real. */
+  const at = (iso: string) => vi.useFakeTimers({ now: new Date(iso), toFake: ["Date"] });
+
+  beforeEach(() => {
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    // Let the clock decide who answers, which is what this is about.
+    vi.stubEnv("ONCALL_ALWAYS", "false");
+  });
+
+  it("leaves a business-hours office call alone", async () => {
+    // Tuesday 1:00 PM in Seattle: the office picks up, and whoever is at that
+    // desk never joined an on-call rotation.
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${OFFICE}</Number>`);
+    expect(xml).not.toContain("record=");
+    expect(xml).not.toContain("will be recorded");
+  });
+
+  it("records the same line once the rotation has it", async () => {
+    // Tuesday 9:00 PM in Seattle — same phone number, same switch, after hours.
+    at("2026-09-16T04:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
+    expect(xml).toContain('record="record-from-answer-dual"');
+    expect(xml).toContain("This call will be recorded");
+  });
+
+  it("does not record the backup manager on a daytime call either", async () => {
+    // An unanswered office call escalates to the backup manager. Still daytime,
+    // so still not the rotation's call to record.
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice?stage=backup", { DialCallStatus: "no-answer" }));
+
+    expect(xml).toContain(`<Number>${BACKUP}</Number>`);
+    expect(xml).not.toContain("record=");
+  });
+
+  it("still records everything when the rotation is on around the clock", async () => {
+    // ONCALL_ALWAYS means there are no business hours to carve out.
+    vi.stubEnv("ONCALL_ALWAYS", "true");
+    at("2026-09-15T20:00:00Z");
+
+    const xml = await xmlOf(await call("/api/twilio/voice"));
+
+    expect(xml).toContain(`<Number>${MIKE_PHONE}</Number>`);
+    expect(xml).toContain('record="record-from-answer-dual"');
   });
 });

@@ -1,6 +1,10 @@
+import { background } from "@/lib/oncall/background";
 import { getOnCallConfig, type OnCallConfig } from "@/lib/oncall/config";
-import { formatUS, toE164 } from "@/lib/oncall/phone";
+import { incomingCallMessage } from "@/lib/oncall/message";
+import { toE164 } from "@/lib/oncall/phone";
 import { resolveDestination } from "@/lib/oncall/routing";
+import { lookupCaller, type CallerLookup } from "@/lib/oncall/tenants";
+import { isOnCallWindow } from "@/lib/oncall/window";
 import {
   candidateUrls,
   isValidTwilioRequest,
@@ -26,12 +30,35 @@ export const runtime = "nodejs";
  * Every leg dials out with the office number as the caller ID, so a technician
  * sees the same number every single time and can set an Emergency Bypass /
  * Priority rule for it. The tenant's real number is texted to the technician
- * instead, since the caller ID no longer carries it.
+ * instead, along with the unit it belongs to, since the caller ID no longer
+ * carries either.
  */
 
 type Stage = "tech" | "backup" | "voicemail" | "goodbye";
 
 const ANSWERED = new Set(["completed", "answered"]);
+
+/** Both sides, on separate channels, starting only once somebody picks up. */
+const RECORD_MODE = "record-from-answer-dual";
+
+/**
+ * Washington is an all-party consent state (RCW 9.73.030): everyone on a
+ * recorded call has to be told. This plays to the resident before anything is
+ * dialed; technicians are told in writing when they join the rotation. Nothing
+ * is recorded at all unless ONCALL_RECORD_CALLS is turned on.
+ */
+const RECORDING_NOTICE = "This call will be recorded for maintenance records.";
+
+/**
+ * Recording follows the rotation, not the switch alone. A call that reaches the
+ * office during business hours is an ordinary office call — the people
+ * answering it did not join an on-call rotation, and residents calling in
+ * daylight are not reporting an after-hours emergency. Only the rotation's own
+ * calls are recorded.
+ */
+function shouldRecord(config: OnCallConfig, now: Date): boolean {
+  return config.recordCalls && isOnCallWindow(now, config);
+}
 
 function log(entry: Record<string, unknown>) {
   console.log(JSON.stringify({ event: "oncall", ...entry }));
@@ -42,7 +69,22 @@ function stageUrl(stage: Stage, attempt?: number): string {
   return `/api/twilio/voice${query}`;
 }
 
-function voicemail(config: OnCallConfig): string {
+/**
+ * Twilio's recording callback carries the call SID and nothing about who was
+ * on the call, so the caller ID rides along in the URL. Twilio signs the whole
+ * URL, query string included, which is what keeps it from being forged.
+ */
+function withCaller(path: string, callerNumber: string | null): string {
+  return callerNumber ? `${path}?from=${encodeURIComponent(callerNumber)}` : path;
+}
+
+/** The recording attributes for a `<Dial>`, or nothing at all when recording is off. */
+function recordingFor(recording: boolean, callerNumber: string | null) {
+  if (!recording) return {};
+  return { record: RECORD_MODE, recordingStatusCallback: withCaller("/api/twilio/recording", callerNumber) };
+}
+
+function voicemail(config: OnCallConfig, callerNumber: string | null): string {
   return twiml(
     say(
       `You have reached the ${config.companyName} after hours maintenance line. ` +
@@ -50,29 +92,29 @@ function voicemail(config: OnCallConfig): string {
         "and a description of the problem after the tone, and someone will call you back. " +
         "If this is a life threatening emergency, hang up and dial 9 1 1."
     ),
-    record({ action: stageUrl("goodbye") })
+    record({
+      action: stageUrl("goodbye"),
+      recordingStatusCallback: withCaller("/api/twilio/voicemail", callerNumber),
+    })
   );
 }
 
-/**
- * The message texted to whoever is about to be rung. The number goes on its own
- * labelled line: this is read one-handed at 2am, and "call them back on this
- * number" in a text sent *from* the office line is exactly the wrong number to
- * reach the resident on. A line of its own also makes it tappable.
- *
- * Exported for tests — the wording is the product here, not an implementation
- * detail, and it is the one thing in the system a technician actually reads.
- */
-export function incomingCallMessage(companyName: string, callerNumber: string | null): string {
-  const opening = `${companyName} after-hours: maintenance call ringing you now.`;
-  return callerNumber
-    ? `${opening}\nResident callback: ${formatUS(callerNumber)}\nYour screen shows the office line, not the resident's.`
-    : `${opening}\nResident's number came through blocked. Get a callback number on the call.`;
+/** Who is calling, from the tenant directory — or null when there is nothing to ask. */
+async function whoIsCalling(
+  config: OnCallConfig,
+  callerNumber: string | null
+): Promise<CallerLookup | null> {
+  if (!config.supabase || !config.callerLookup || !callerNumber) return null;
+  return lookupCaller(config.supabase, callerNumber);
 }
 
 /**
  * Texts the person we are about to ring, because the caller ID they see is the
  * office line rather than the tenant's number.
+ *
+ * All of it — the directory lookup and the text itself — happens after the
+ * TwiML has gone back to Twilio. Neither is worth a second of hold music, and
+ * a directory that is slow or down must not delay a ringing phone.
  */
 async function textIncomingCaller(
   config: OnCallConfig,
@@ -82,14 +124,23 @@ async function textIncomingCaller(
   const sender = smsSender(config);
   if (!sender) return;
 
-  const body = incomingCallMessage(config.companyName, callerNumber);
-  const result = await sendSms(sender.twilio, { to, from: sender.from, body });
-  if (!result.ok) log({ stage: "sms", ok: false, to, error: result.error });
+  await background(async () => {
+    const lookup = await whoIsCalling(config, callerNumber);
+    if (lookup?.error) log({ stage: "lookup", ok: false, error: lookup.error });
+    else if (lookup) log({ stage: "lookup", ok: true, matched: lookup.matches.length });
+
+    const body = incomingCallMessage(config.companyName, callerNumber, lookup);
+    const result = await sendSms(sender.twilio, { to, from: sender.from, body });
+    if (!result.ok) log({ stage: "sms", ok: false, to, error: result.error });
+  });
 }
 
 export async function POST(request: Request) {
   const config = getOnCallConfig();
   const params = await readTwilioParams(request);
+  // One clock reading for the whole request: the routing decision and the
+  // recording decision must not disagree across a 5:00 pm boundary.
+  const now = new Date();
   const url = new URL(request.url);
   const stage = (url.searchParams.get("stage") ?? "tech") as Stage;
   const attempt = Math.min(Math.max(Number.parseInt(url.searchParams.get("attempt") ?? "1", 10) || 1, 1), 3);
@@ -99,6 +150,7 @@ export async function POST(request: Request) {
   // Whatever the tenant dialed *is* the office line, so it is a safe caller ID
   // even before TWILIO_MAIN_LINE is set.
   const callerId = config.mainLine ?? toE164(params.To);
+  const recording = shouldRecord(config, now);
 
   if (config.twilio) {
     const urls = candidateUrls(request, config.publicBaseUrl);
@@ -124,7 +176,7 @@ export async function POST(request: Request) {
             timeoutSeconds: config.dialTimeoutSeconds,
             action: stageUrl("voicemail"),
           }))
-        : voicemail(config)
+        : voicemail(config, callerNumber)
     );
   }
 
@@ -144,13 +196,13 @@ export async function POST(request: Request) {
 
   if (stage === "voicemail") {
     log({ stage, callSid, dialStatus: params.DialCallStatus });
-    return twimlResponse(voicemail(config));
+    return twimlResponse(voicemail(config, callerNumber));
   }
 
   if (stage === "backup") {
     if (!config.backupPhone) {
       log({ stage, callSid, note: "no_backup_configured" });
-      return twimlResponse(voicemail(config));
+      return twimlResponse(voicemail(config, callerNumber));
     }
     log({ stage, callSid, to: config.backupPhone, dialStatus: params.DialCallStatus });
     await textIncomingCaller(config, config.backupPhone, callerNumber);
@@ -162,13 +214,14 @@ export async function POST(request: Request) {
           callerId,
           timeoutSeconds: config.dialTimeoutSeconds,
           action: stageUrl("voicemail"),
+          ...recordingFor(recording, callerNumber),
         })
       )
     );
   }
 
   // stage === "tech"
-  const decision = await resolveDestination(new Date(), config);
+  const decision = await resolveDestination(now, config);
   log({
     stage,
     attempt,
@@ -182,7 +235,7 @@ export async function POST(request: Request) {
   });
 
   if (decision.destination.kind === "voicemail") {
-    return twimlResponse(voicemail(config));
+    return twimlResponse(voicemail(config, callerNumber));
   }
 
   const { phone } = decision.destination;
@@ -195,7 +248,17 @@ export async function POST(request: Request) {
   // Only text on the first attempt — a second buzz for the same call is noise.
   if (attempt === 1) await textIncomingCaller(config, phone, callerNumber);
 
+  const connect = dial({
+    to: phone,
+    callerId,
+    timeoutSeconds: config.dialTimeoutSeconds,
+    action: nextAction,
+    ...recordingFor(recording, callerNumber),
+  });
+
+  // The consent announcement belongs on the first leg only: it is one notice
+  // per call, not one per unanswered ring.
   return twimlResponse(
-    twiml(dial({ to: phone, callerId, timeoutSeconds: config.dialTimeoutSeconds, action: nextAction }))
+    recording && attempt === 1 ? twiml(say(RECORDING_NOTICE), connect) : twiml(connect)
   );
 }

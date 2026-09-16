@@ -17,7 +17,7 @@ Tenant calls the office line, 9:40pm Saturday
   │     nobody / calendar down → skip to the backup manager
   │     ↓
   ├─ Ring the on-call tech for 25 seconds       ← caller ID: the office number
-  │     └─ text the tech: "call from (206) 555-9876"
+  │     └─ text the tech: which unit is calling, and the number to call back
   ├─ No answer → ring the same tech again, 25 seconds
   ├─ Still nothing → "please hold", ring the backup manager (also texted)
   └─ Still nothing → voicemail, and the recording is texted to the backup manager
@@ -61,6 +61,8 @@ Set these for **Production** and **Preview**. Full list with defaults in
 | `ONCALL_OFFICE_PHONE` | Where business-hours calls go. Leave blank for 24/7 rotation. |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` / `GOOGLE_CALENDAR_ID` | From the JSON key file and the calendar's settings page. Paste the private key exactly as it appears, `\n` sequences and all. |
 | `ONCALL_API_KEY` | Any long random string. Required before the status page will show full phone numbers. |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Optional. Turns on the unit lookup and the call log. The service-role key is server-only — never prefix it with `NEXT_PUBLIC_`. |
+| `ONCALL_RECORD_CALLS` | Optional, off by default. Records the rotation's calls only, never business-hours office calls. Recording in Washington means announcing it — see below before turning it on. |
 
 ### 4. Point the number at the app
 
@@ -74,6 +76,122 @@ That is the whole install. No Studio flow needed — the app answers Twilio
 directly. (A Studio version is included at `twilio/studio-flow.json` if you
 ever want to edit the call flow by dragging boxes; it is simpler and does not
 do the escalation ladder or the texts.)
+
+## Telling the technician which unit is calling
+
+Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, then run
+[`docs/oncall-caller-lookup.sql`](oncall-caller-lookup.sql) once in the Supabase
+SQL editor. From the next call on, the caller ID is matched against
+`tenant_directory` and the text reads:
+
+```
+Milestone Properties after-hours call ringing you now.
+Willow Lake #V-12, Nadia Kovacs
+Callback: (206) 555-9876
+Do not call back the number on your screen.
+```
+
+Nothing else changes: the whole lookup happens after the call is already being
+connected, and a directory that is slow, missing or down costs that one line
+and nothing more.
+
+What it will not do is guess. Roughly one number in two hundred in the
+directory sits on two different leases; those say "2 units share this number"
+instead of naming a door. A number nobody has says so. Only a number matched to
+exactly one unit gets a unit printed.
+
+Two things make matches miss, and both are fixed in AppFolio rather than here:
+
+- **The resident is calling from a number the directory does not have** — a
+  partner's phone, a new number they have not told you about. The text says the
+  number is not in the directory and the technician asks, as they do today.
+- **The directory has a placeholder.** There are a handful of records carrying
+  `000-000-0000` and one real mobile listed on six different units. Cleaning
+  those up in AppFolio is what makes the match land; nothing here has to change.
+
+The match is read live on every call — nothing is copied into this app — so a
+correction is in effect the moment `tenant_directory` carries it. That table is
+what lags: it refreshes **weekly, on Mondays**. A resident who moves in on
+Tuesday is therefore an unmatched number until the following Monday, and a
+move-out keeps matching for the same stretch. If that gap matters, the fix is to
+run the tenant directory sync more often — nothing in the phone line has to
+change for it.
+
+## Recording calls
+
+**Off until you turn it on**, and worth reading before you do.
+
+Washington is an **all-party consent** state (RCW 9.73.030): every person on a
+recorded call has to be told. With `ONCALL_RECORD_CALLS=true`:
+
+- Every caller hears *"This call will be recorded for maintenance records"*
+  before anything is dialed — once per call, not once per unanswered ring.
+- Recording starts when somebody answers, so an unanswered ring leaves nothing
+  behind, and both sides are captured on separate channels.
+- **Only the rotation's calls.** Weekday daytime calls reach the office and are
+  not recorded or announced — the person at that desk never joined an on-call
+  rotation. The switch covers the after-hours window only, the same window the
+  rotation itself answers. (`ONCALL_ALWAYS=true` removes the distinction.)
+- **Technicians are your side of the consent.** Tell each one in writing when
+  they join the rotation that after-hours calls they answer are recorded; a
+  line in the on-call policy they sign is the usual way to do it. The system
+  cannot do this part for you.
+
+A lawyer should look at the wording before this goes live in front of
+residents. It is one environment variable to switch back off.
+
+### The notice technicians get
+
+Give this to every technician before their first shift, in writing, and keep
+the signed copy. The resident's half of the consent is the announcement they
+hear; this is the other half.
+
+> **Recording on the after-hours maintenance line**
+>
+> Calls to the Milestone Properties after-hours maintenance line are recorded,
+> including your side of them. Recording starts when you answer and ends when
+> the call does. Only calls that come through the after-hours rotation are
+> recorded — calls to the office during business hours are not.
+>
+> The resident hears an announcement before the call is connected. This notice
+> is yours: by taking an on-call shift, you agree to be recorded on the calls
+> you answer during it.
+>
+> Recordings are kept in Milestone's phone system and can be played back by
+> office staff who have the on-call dashboard password. They are used to write
+> up work orders and to establish what was said when an incident is disputed.
+> They are not used to monitor your performance call by call.
+>
+> Questions about any of this go to [name] before your next shift.
+
+That last paragraph is a commitment, so keep it only if it is true of how you
+intend to use the recordings.
+
+### Listening back, and the note that goes into AppFolio
+
+`/calls` lists recorded calls and voicemails newest first, behind the same
+password as the scheduling dashboard, each one already filed under the unit
+that called. Play it in the browser, then **Copy note**:
+
+```
+After-hours call — Sat, Sep 13, 9:41 PM
+Willow Lake Apartments #V-12 — Nadia Kovacs
+From (206) 555-9876 · 4 min 12 sec
+Recording: https://…/api/calls/RE…/audio
+
+Reported:
+Action taken:
+Follow-up:
+```
+
+Paste it into the AppFolio work order and fill in the last three lines.
+
+The recordings themselves stay in Twilio. The page never hands the browser a
+Twilio URL — it fetches the audio server-side with the account's credentials
+and streams it through `/api/calls/[sid]/audio`, which needs the dashboard
+password. Set a retention period in the Twilio Console (Voice → Settings) so
+recordings of residents are not kept forever by default, and remember that
+storage is billed per recording per month.
 
 ## Running the rotation week to week
 
@@ -152,6 +270,10 @@ same number.
 | No "who is calling" text | `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` missing, or A2P 10DLC not registered | Check the status URL's warnings, then Twilio's Messaging logs |
 | Tech's voicemail answers instead of escalating | Their carrier voicemail picks up before 25 seconds | Lower `ONCALL_DIAL_TIMEOUT`, or have the tech extend their carrier's ring time |
 | Line answers but nobody is reachable | Everything failed, so it took a voicemail | The recording is texted to `ONCALL_VOICEMAIL_NOTIFY` (or the backup manager) |
+| Texts never name a unit | `docs/oncall-caller-lookup.sql` has not been run, or Supabase is not configured | Vercel logs show `"stage":"lookup"` with the reason on every call |
+| A text names the wrong unit | Two leases carry that number in AppFolio | It says "2 units share this number" instead of guessing; fix the record in AppFolio |
+| `/calls` is empty | Recording is off, and nobody has left a voicemail | The page says so at the top; set `ONCALL_RECORD_CALLS=true` to record answered calls |
+| A recording will not play | The dashboard session expired, or Twilio deleted it under its retention policy | Sign in again; check Twilio → Monitor → Recordings |
 
 Every call writes one line to the Vercel logs (`event: "oncall"`) with who was
 chosen and why — filter on `oncall` in Vercel → Logs to see last night's calls.
@@ -162,6 +284,10 @@ chosen and why — filter on `oncall` in Vercel → Logs to see last night's cal
 | --- | --- |
 | `src/app/api/twilio/voice/route.ts` | The webhook Twilio calls; runs the escalation ladder |
 | `src/app/api/twilio/voicemail/route.ts` | Texts the voicemail link when a message is left |
+| `src/app/api/twilio/recording/route.ts` | Files a recorded call under the unit that made it |
+| `src/lib/oncall/tenants.ts` | Matches a caller ID to a unit in the tenant directory |
+| `src/lib/oncall/message.ts` | Writes the text the technician reads, inside one SMS segment |
+| `src/app/calls/page.tsx` | Listening back, and the note that goes into AppFolio |
 | `src/app/api/oncall/status/route.ts` | "Who is on call right now?" as JSON |
 | `src/lib/oncall/calendar.ts` | Reads the shift from Google Calendar (service-account JWT, no SDK) |
 | `src/lib/oncall/window.ts` | After-hours rules, in Seattle time, daylight saving included |
