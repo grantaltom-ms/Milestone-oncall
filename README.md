@@ -113,8 +113,8 @@ Twilio token in a browser.
 ## What the call was about
 
 With `TWILIO_INTELLIGENCE_SERVICE_SID` set, every recording is transcribed by
-Twilio Conversational Intelligence — chosen over a dedicated transcription
-vendor because the audio never leaves Twilio. Dual-channel recording means who
+Twilio Conversation Intelligence (classic) — chosen over a dedicated
+transcription vendor because the audio never leaves Twilio. Dual-channel recording means who
 spoke is a fact rather than a guess, so the transcript comes back labelled:
 
 ```
@@ -147,7 +147,11 @@ call and can change nothing, because none of the data it carries is used.
 
 Run [`docs/oncall-transcripts.sql`](docs/oncall-transcripts.sql) to add the
 columns, and point the Intelligence Service's webhook at
-`/api/twilio/transcript`.
+`/api/twilio/transcript`. The Service must come from Conversation Intelligence
+**(classic)** and its SID is `GA` plus 32 hex — the newer Conversation
+Intelligence is a different product whose IDs this app cannot use. See
+[the runbook](docs/oncall-routing.md#setting-it-up) for which console page, and
+`/api/oncall/status` for whether it took.
 
 Worth knowing: a transcript is a far more spreadable thing than an audio file —
 searchable, copy-pasteable, easy to forward. It sits behind the same password,

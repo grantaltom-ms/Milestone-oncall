@@ -1,9 +1,28 @@
-import { getOnCallConfig, TWILIO_AUTH_TOKEN_LENGTH } from "@/lib/oncall/config";
+import {
+  getOnCallConfig,
+  INTELLIGENCE_CONFIGURATION_PREFIX,
+  INTELLIGENCE_SERVICE_SID_PATTERN,
+  TWILIO_AUTH_TOKEN_LENGTH,
+  type OnCallConfig,
+} from "@/lib/oncall/config";
 import { maskPhone } from "@/lib/oncall/phone";
 import { resolveDestination } from "@/lib/oncall/routing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/**
+ * How far a recorded call actually gets: audio, then words, then a note a
+ * person can paste. Reported as one word so "did my change land?" has an
+ * answer that does not require placing a real call to find out.
+ */
+function transcriptionState(config: OnCallConfig): string {
+  const sid = config.intelligenceServiceSid;
+  if (!sid) return "off";
+  if (!INTELLIGENCE_SERVICE_SID_PATTERN.test(sid)) return "misconfigured";
+  if (!config.recordCalls) return "no_recordings";
+  return config.anthropic ? "summarized" : "transcript_only";
+}
 
 /**
  * "Who picks up if a tenant calls right now?" — the same decision the phone
@@ -47,6 +66,33 @@ export async function GET(request: Request) {
   }
   if (!config.statusApiKey) warnings.push("ONCALL_API_KEY is not set — this endpoint will never show full phone numbers.");
 
+  // Transcription is a chain — audio, a Service to send it to, a key to write up
+  // what comes back — and every link of it fails quietly on its own.
+  const serviceSid = config.intelligenceServiceSid;
+  if (serviceSid && !INTELLIGENCE_SERVICE_SID_PATTERN.test(serviceSid)) {
+    warnings.push(
+      (serviceSid.startsWith(INTELLIGENCE_CONFIGURATION_PREFIX)
+        ? "TWILIO_INTELLIGENCE_SERVICE_SID holds an Intelligence Configuration ID from the newer Conversation Intelligence. This app speaks to Conversation Intelligence (classic), a separate product with its own console section and its own Services. "
+        : "TWILIO_INTELLIGENCE_SERVICE_SID is not shaped like a Service SID. ") +
+        'A classic Service SID is "GA" followed by 32 hex characters, created under Conversation Intelligence (classic) → Services. No call is transcribed until this is corrected.'
+    );
+  }
+  if (config.recordCalls && !serviceSid) {
+    warnings.push(
+      "TWILIO_INTELLIGENCE_SERVICE_SID is not set — calls are recorded but never transcribed, so the call log holds audio somebody still has to sit and listen to."
+    );
+  }
+  if (serviceSid && !config.recordCalls) {
+    warnings.push(
+      "ONCALL_RECORD_CALLS is off — there is no audio for the Intelligence Service to work from, so no transcript is ever requested."
+    );
+  }
+  if (serviceSid && config.recordCalls && !config.anthropic) {
+    warnings.push(
+      "ANTHROPIC_API_KEY is not set — calls are transcribed but not summarized, so the call log shows the whole transcript and no note to paste."
+    );
+  }
+
   return Response.json({
     checked_at: now.toISOString(),
     local_time: decision.localLabel,
@@ -59,6 +105,7 @@ export async function GET(request: Request) {
     tech_phone_last4: maskPhone(phone),
     destination: destination.kind,
     reason: decision.reason,
+    transcription: transcriptionState(config),
     caller_id: authorized ? config.mainLine : maskPhone(config.mainLine),
     warnings,
   });

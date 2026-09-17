@@ -99,3 +99,69 @@ describe("GET /api/oncall/status", () => {
     expect(warnings.join(" ")).toContain("ONCALL_BACKUP_PHONE");
   });
 });
+
+describe("GET /api/oncall/status, on the transcription chain", () => {
+  // Assembled rather than written out, for the same reason as the auth token
+  // above: a literal SID is a credential shape secret scanning objects to.
+  const validServiceSid = `GA${"0123456789abcdef".repeat(2)}`;
+
+  const warningsFrom = async (): Promise<string> =>
+    ((await (await status()).json()).warnings as string[]).join(" ");
+
+  it("catches the newer product's configuration ID pasted in place of a Service SID", async () => {
+    // The trap this guard exists for: both products sit in the same console
+    // under near-identical names, and the wrong ID fails silently mid-call.
+    vi.stubEnv("TWILIO_INTELLIGENCE_SERVICE_SID", "intelligence_configuration_01m2p59dwwe5s9fvf1c0prge4y");
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const body = await (await status()).json();
+    expect(body.transcription).toBe("misconfigured");
+    expect(body.warnings.join(" ")).toContain("Intelligence Configuration ID from the newer");
+    expect(body.warnings.join(" ")).toContain('"GA" followed by 32 hex characters');
+  });
+
+  it("flags any other malformed SID without blaming the wrong product", async () => {
+    vi.stubEnv("TWILIO_INTELLIGENCE_SERVICE_SID", "GA-not-hex");
+    const warnings = await warningsFrom();
+    expect(warnings).toContain("not shaped like a Service SID");
+    expect(warnings).not.toContain("newer Conversation Intelligence");
+  });
+
+  it("says recordings go untranscribed when the Service SID is missing", async () => {
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const body = await (await status()).json();
+    expect(body.transcription).toBe("off");
+    expect(body.warnings.join(" ")).toContain("recorded but never transcribed");
+  });
+
+  it("says a Service with recording off will never be handed any audio", async () => {
+    vi.stubEnv("TWILIO_INTELLIGENCE_SERVICE_SID", validServiceSid);
+    const body = await (await status()).json();
+    expect(body.transcription).toBe("no_recordings");
+    expect(body.warnings.join(" ")).toContain("ONCALL_RECORD_CALLS is off");
+  });
+
+  it("separates a transcript with no summary from the finished article", async () => {
+    vi.stubEnv("TWILIO_INTELLIGENCE_SERVICE_SID", validServiceSid);
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    const withoutKey = await (await status()).json();
+    expect(withoutKey.transcription).toBe("transcript_only");
+    expect(withoutKey.warnings.join(" ")).toContain("transcribed but not summarized");
+
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test");
+    const withKey = await (await status()).json();
+    expect(withKey.transcription).toBe("summarized");
+  });
+
+  it("stays quiet once the whole chain is set up, and mixed case still counts", async () => {
+    // Twilio prints SIDs lowercase, but a SID copied out of an email or a
+    // spreadsheet often arrives upper-cased; both are the same Service.
+    vi.stubEnv("TWILIO_INTELLIGENCE_SERVICE_SID", validServiceSid.toUpperCase());
+    vi.stubEnv("ONCALL_RECORD_CALLS", "true");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test");
+    const body = await (await status()).json();
+    expect(body.transcription).toBe("summarized");
+    expect(body.warnings.join(" ")).not.toContain("TWILIO_INTELLIGENCE_SERVICE_SID");
+    expect(body.warnings.join(" ")).not.toContain("ONCALL_RECORD_CALLS");
+    expect(body.warnings.join(" ")).not.toContain("ANTHROPIC_API_KEY");
+  });
+});
