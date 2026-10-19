@@ -176,4 +176,26 @@ test.describe("the shift form", () => {
     expect(events).toHaveLength(1);
     expect(new Date(events[0].end.dateTime).toISOString()).toBe("2026-09-19T15:00:00.000Z");
   });
+
+  test("one click loads the fall rotation, and a second click adds nothing", async ({ page, request }) => {
+    const names = ["Bhakti Shah", "Yurii Kovalenko", "Jim Ortiz", "Angel Ruiz"];
+    await request.post(MOCK, {
+      data: {
+        reset: true,
+        calendarStatus: 200,
+        items: [],
+        techs: names.map((name, i) => ({ id: i + 1, name, phone: `+1206555010${i + 1}`, active: true })),
+      },
+    });
+    await signIn(page);
+
+    await page.getByRole("button", { name: "Add the fall rotation" }).click();
+    await expect(page.getByText("Added 8 shifts; 0 were already on the calendar.")).toBeVisible();
+    expect(await calendarEvents(request)).toHaveLength(8);
+    await expect(page.getByText("Coverage problems")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Add the fall rotation" }).click();
+    await expect(page.getByText("Added 0 shifts; 8 were already on the calendar.")).toBeVisible();
+    expect(await calendarEvents(request)).toHaveLength(8);
+  });
 });
