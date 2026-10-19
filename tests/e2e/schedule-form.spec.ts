@@ -37,6 +37,39 @@ async function calendarEvents(request: APIRequestContext): Promise<MockEvent[]> 
   );
 }
 
+/**
+ * Days are worked out from today rather than written down: the dashboard only
+ * lists shifts from a week ago onward, so a date typed into a test stops being
+ * listed the week after it passes, and the test fails for no reason.
+ */
+const seattleDay = (ms: number) =>
+  new Date(ms).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+
+function addDays(day: string, days: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** The Monday after today, in Seattle. */
+function upcomingMonday(): string {
+  const today = seattleDay(Date.now());
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+  return addDays(today, ((8 - weekday) % 7) || 7);
+}
+
+/** "Mon, Sep 14" for a `YYYY-MM-DD` day. */
+const longDay = (day: string) =>
+  new Date(`${day}T12:00:00Z`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+
+/** An instant as Seattle wall-clock, "2026-09-14 08:00" — the handoff is 8:00 whatever the season. */
+const seattleClock = (iso: string) =>
+  new Date(iso).toLocaleString("sv-SE", { timeZone: "America/Los_Angeles" }).slice(0, 16);
+
 async function signIn(page: import("@playwright/test").Page) {
   await page.goto(`${APP}/schedule`);
   await page.getByLabel("Password").fill(config.dashboardPassword);
@@ -81,24 +114,27 @@ test.describe("the shift form", () => {
     await expect(lastDay).toHaveAttribute("type", "date");
     await expect(page.locator("input[type='datetime-local']")).toHaveCount(0);
 
-    await firstDay.fill("2026-09-14");
+    const monday = upcomingMonday();
+    await firstDay.fill(monday);
     // A week is filled in for you, and the exact window is spelled out.
-    await expect(lastDay).toHaveValue("2026-09-20");
-    await expect(page.getByText(/On call from Mon, Sep 14, 8:00 AM to Mon, Sep 21, 8:00 AM/)).toBeVisible();
+    await expect(lastDay).toHaveValue(addDays(monday, 6));
+    await expect(
+      page.getByText(`On call from ${longDay(monday)}, 8:00 AM to ${longDay(addDays(monday, 7))}, 8:00 AM`, { exact: false })
+    ).toBeVisible();
     await expect(page.getByText(/7 days/)).toBeVisible();
 
     await page.getByLabel("Technician").selectOption({ label: config.techA.name });
     await page.getByRole("button", { name: "Add shift" }).click();
 
     // The form rolling on to the next week is the signal the save went through.
-    await expect(firstDay).toHaveValue("2026-09-21");
+    await expect(firstDay).toHaveValue(addDays(monday, 7));
     await expect(page.getByText(config.techA.phone)).toBeVisible();
     const events = await calendarEvents(request);
     expect(events).toHaveLength(1);
     expect(events[0].summary).toBe(config.techA.name);
     // Monday 8:00 AM Pacific through the following Monday 8:00 AM.
-    expect(new Date(events[0].start.dateTime).toISOString()).toBe("2026-09-14T15:00:00.000Z");
-    expect(new Date(events[0].end.dateTime).toISOString()).toBe("2026-09-21T15:00:00.000Z");
+    expect(seattleClock(events[0].start.dateTime)).toBe(`${monday} 08:00`);
+    expect(seattleClock(events[0].end.dateTime)).toBe(`${addDays(monday, 7)} 08:00`);
   });
 
   test("refuses a last day that comes before the first", async ({ page, request }) => {
@@ -155,26 +191,27 @@ test.describe("the shift form", () => {
     await resetMock(request);
     await signIn(page);
 
-    await page.getByLabel("First day").fill("2026-09-14");
+    const monday = upcomingMonday();
+    await page.getByLabel("First day").fill(monday);
     await page.getByLabel("Technician").selectOption({ label: config.techA.name });
     await page.getByRole("button", { name: "Add shift" }).click();
-    await expect(page.getByLabel("First day")).toHaveValue("2026-09-21");
+    await expect(page.getByLabel("First day")).toHaveValue(addDays(monday, 7));
 
     await page.getByRole("button", { name: "Edit" }).click();
     await expect(page.getByRole("heading", { name: "Edit shift" })).toBeVisible();
     // The shift ends Monday 8:00 AM; the last day it covers is the Sunday.
-    await expect(page.getByLabel("First day")).toHaveValue("2026-09-14");
-    await expect(page.getByLabel("Last day")).toHaveValue("2026-09-20");
+    await expect(page.getByLabel("First day")).toHaveValue(monday);
+    await expect(page.getByLabel("Last day")).toHaveValue(addDays(monday, 6));
 
     // Hand the last two days to someone else by shortening it.
-    await page.getByLabel("Last day").fill("2026-09-18");
+    await page.getByLabel("Last day").fill(addDays(monday, 4));
     await page.getByRole("button", { name: "Save changes" }).click();
     // Back to "Add a shift" means the edit was accepted and the list reloaded.
     await expect(page.getByRole("heading", { name: "Add a shift" })).toBeVisible();
 
     const events = await calendarEvents(request);
     expect(events).toHaveLength(1);
-    expect(new Date(events[0].end.dateTime).toISOString()).toBe("2026-09-19T15:00:00.000Z");
+    expect(seattleClock(events[0].end.dateTime)).toBe(`${addDays(monday, 5)} 08:00`);
   });
 
   test("one click loads the fall rotation, and a second click adds nothing", async ({ page, request }) => {
