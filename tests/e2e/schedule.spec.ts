@@ -158,4 +158,56 @@ test.describe("scheduling dashboard", () => {
     expect(backwards.status()).toBe(400);
     expect((await backwards.json()).error).toContain("ends before it starts");
   });
+
+  test("the fall rotation loads once, survives a second press, and refuses a clash", async ({ request }) => {
+    const roster = ["Bhakti Shah", "Yurii Kovalenko", "Jim Ortiz", "Angel Ruiz"].map((name, i) => ({
+      id: i + 1,
+      name,
+      phone: `+1206555010${i + 1}`,
+      active: true,
+    }));
+    await request.post(MOCK, { data: { reset: true, calendarStatus: 200, items: [], techs: roster } });
+    await signIn(request);
+
+    const first = await request.post(`${APP}/api/schedule/rotation`);
+    expect(first.status()).toBe(200);
+    expect(await first.json()).toEqual({ created: 8, alreadyThere: 0 });
+
+    const listed = await (
+      await request.get(`${APP}/api/schedule/shifts?from=2026-10-01T00:00:00Z&to=2026-12-31T00:00:00Z`)
+    ).json();
+    expect(listed.shifts.map((s: { techName: string }) => s.techName)).toEqual([
+      "Bhakti Shah", "Yurii Kovalenko", "Jim Ortiz", "Angel Ruiz",
+      "Bhakti Shah", "Yurii Kovalenko", "Jim Ortiz", "Angel Ruiz",
+    ]);
+    // Monday 8:00 AM Seattle handoffs, either side of the 11/1 clock change.
+    expect(listed.shifts[0].start).toContain("2026-10-12T15:00:00");
+    expect(listed.shifts[3].start).toContain("2026-11-02T16:00:00");
+
+    // Pressing the button again adds nothing — no double-booked weeks.
+    const second = await request.post(`${APP}/api/schedule/rotation`);
+    expect(await second.json()).toEqual({ created: 0, alreadyThere: 8 });
+    const again = await (
+      await request.get(`${APP}/api/schedule/shifts?from=2026-10-01T00:00:00Z&to=2026-12-31T00:00:00Z`)
+    ).json();
+    expect(again.shifts).toHaveLength(8);
+
+    // A different person already holding one of those weeks stops the whole load.
+    await request.post(MOCK, { data: { reset: true, calendarStatus: 200, items: [], techs: roster } });
+    await request.post(`${APP}/api/schedule/shifts`, {
+      data: {
+        techName: "Someone Else",
+        phone: "+12065550199",
+        start: "2026-11-03T16:00:00.000Z",
+        end: "2026-11-10T16:00:00.000Z",
+      },
+    });
+    const clash = await request.post(`${APP}/api/schedule/rotation`);
+    expect(clash.status()).toBe(409);
+    expect((await clash.json()).problems.join(" ")).toContain("Someone Else");
+    const afterClash = await (
+      await request.get(`${APP}/api/schedule/shifts?from=2026-10-01T00:00:00Z&to=2026-12-31T00:00:00Z`)
+    ).json();
+    expect(afterClash.shifts).toHaveLength(1);
+  });
 });

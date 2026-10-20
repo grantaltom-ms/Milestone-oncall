@@ -94,6 +94,7 @@ export default function SchedulePage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [now, setNow] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
@@ -225,6 +226,22 @@ export default function SchedulePage() {
     reload();
   }
 
+  async function loadRotation() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const res = await fetch("/api/schedule/rotation", { method: "POST" });
+    const body = await res.json();
+    setBusy(false);
+    if (!res.ok) {
+      const problems: string[] = body.problems ?? [];
+      setError([body.error ?? "Could not load the rotation.", ...problems].join(" "));
+      return;
+    }
+    setNotice(`Added ${body.created} shifts; ${body.alreadyThere} were already on the calendar.`);
+    reload();
+  }
+
   async function remove(id: string) {
     setBusy(true);
     const res = await fetch(`/api/schedule/shifts/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -304,6 +321,18 @@ export default function SchedulePage() {
 
       {error && <div className="card"><p className="warn">{error}</p></div>}
       {rosterError && <div className="card"><p className="warn">Roster: {rosterError}</p></div>}
+
+      <div className="card">
+        <h2>Fall 2026 rotation</h2>
+        <p className="lede">
+          Bhakti, Yurii, Jim and Angel in turn, Monday 8:00 AM to Monday 8:00 AM, from October 12
+          through December 6. Weeks already on the calendar are left alone.
+        </p>
+        <button className="btn" type="button" onClick={loadRotation} disabled={busy}>
+          {busy ? "Working…" : "Add the fall rotation"}
+        </button>
+        {notice && <p className="ok">{notice}</p>}
+      </div>
 
       <form className="card" onSubmit={save}>
         <h2>{editing ? "Edit shift" : "Add a shift"}</h2>
